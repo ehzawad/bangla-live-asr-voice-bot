@@ -444,11 +444,11 @@
     finally { state.replying = false; setStatus(state.micOn ? "listening…" : "ready", state.micOn ? "listening" : "ready"); }
   }
 
-  function speak(text) {
-    return new Promise((resolve) => {
-      if (!window.speechSynthesis) return resolve();
-      const wasListening = state.micOn;
-      if (wasListening && state.micVad) state.micVad.pause();   // don't transcribe ourselves
+  async function speak(text) {
+    if (!window.speechSynthesis) return;
+    const wasListening = state.micOn;
+    if (wasListening && state.micVad) await state.micVad.pause();
+    return new Promise((resolve) => {   // don't transcribe ourselves
       const u = new SpeechSynthesisUtterance(text);
       u.lang = "bn-BD";
       const v = (speechSynthesis.getVoices() || []).find(v => /^bn|beng/i.test(v.lang));
@@ -457,7 +457,7 @@
       const done = () => {
         if (settled) return; settled = true;
         // only resume if the user has not stopped the mic in the meantime
-        if (wasListening && state.micOn && state.micVad) state.micVad.start();
+        if (wasListening && state.micOn && state.micVad) state.micVad.start().catch(showErr);
         resolve();
       };
       u.onend = done; u.onerror = done;
@@ -549,7 +549,7 @@
     preview.connect();
     $("micBtn").disabled = true; $("micBtn").textContent = "starting…";
     try {
-      if (state.micVad) { try { state.micVad.destroy(); } catch {} state.micVad = null; }
+      if (state.micVad) { try { await state.micVad.destroy(); } catch {} state.micVad = null; }
       state.micVad = await vad.MicVAD.new({
         ...vadOptions(),
         model: "v5",
@@ -595,11 +595,13 @@
     } finally { $("micBtn").disabled = false; }
   }
   function stopLive() { $("live").classList.remove("show"); clearInterval(liveTimer); liveTimer = null; $("liveDur").textContent = "0.0s"; }
-  function stopMic() {
+  async function stopMic() {
     preview.close();
     state.micOn = false;
     releaseScreen();
-    if (state.micVad) { try { state.micVad.pause(); state.micVad.destroy(); } catch {} state.micVad = null; }
+    $("micBtn").disabled = true;
+    if (state.micVad) { try { await state.micVad.pause(); await state.micVad.destroy(); } catch (e) { showErr(e); } state.micVad = null; }
+    $("micBtn").disabled = false;
     stopLive(); $("meter").style.width = "0%";
     $("micBtn").textContent = "🎙 Start listening"; $("micBtn").classList.remove("on");
     setStatus("ready", "ready");
@@ -627,7 +629,7 @@
     download(new Blob([vad.utils.encodeWAV(merged, 1, SR, 1, 16)], { type: "audio/wav" }), `conversation-${state.sessionId || "local"}.wav`);
   });
   $("clearBtn").addEventListener("click", async () => {
-    if (state.micOn) stopMic();
+    if (state.micOn) await stopMic();
     await turnQueue;
     for (const t of state.turns) if (t.url) URL.revokeObjectURL(t.url);
     state.turns = []; state.asrTimes = [];
