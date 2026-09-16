@@ -57,7 +57,7 @@ the newest release NeMo runs on here:
 uv venv --python 3.14 .venv
 uv pip install --index-strategy unsafe-best-match \
   --extra-index-url https://download.pytorch.org/whl/cu128 \
-  "torch==2.9.0+cu128" "nemo_toolkit[asr]==2.7.3" fastapi uvicorn python-multipart soundfile
+  "torch==2.9.0+cu128" "nemo_toolkit[asr]==2.7.3" fastapi uvicorn "websockets>=14,<17" python-multipart soundfile
 ```
 
 Text generation needs Ollama with a chat model:

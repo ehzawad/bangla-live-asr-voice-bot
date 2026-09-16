@@ -1,0 +1,6 @@
+# Lightweight web dependencies; install the NeMo/Torch stack as documented.
+fastapi
+uvicorn
+websockets>=14,<17
+python-multipart
+soundfile
