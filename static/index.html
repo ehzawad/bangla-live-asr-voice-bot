@@ -1,0 +1,677 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0f1216" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>Bangla Voice Conversation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0f1216; --panel: #171b21; --panel-2: #1e242c; --border: #2a323c;
+    --text: #e8ecf1; --muted: #8b96a5; --accent: #4f8cff; --accent-2: #2bd576;
+    --mic: #ff5c5c; --file: #f5b942; --bot: #a78bfa; --danger: #ff5c5c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  .bn { font-family: "Noto Sans Bengali", system-ui, sans-serif; line-height: 1.7; }
+  header { display: flex; align-items: center; gap: 14px; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--panel); flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  header .status { margin-left: auto; color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; }
+  .pill { font-size: 11px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .pill.ok { color: var(--accent-2); border-color: rgba(43,213,118,.4); }
+  .pill.bad { color: var(--danger); border-color: rgba(255,92,92,.4); }
+  .pill.wait { color: var(--file); border-color: rgba(245,185,66,.4); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #555; transition: background .15s, box-shadow .15s; }
+  .dot.ready { background: var(--accent-2); }
+  .dot.listening { background: var(--mic); box-shadow: 0 0 0 4px rgba(255,92,92,.25); }
+  .dot.speaking { background: var(--accent-2); box-shadow: 0 0 0 6px rgba(43,213,118,.35); }
+  .dot.thinking { background: var(--bot); box-shadow: 0 0 0 5px rgba(167,139,250,.3); }
+  main { display: grid; grid-template-columns: 330px 1fr; gap: 16px; padding: 16px 20px; max-width: 1400px; margin: 0 auto; }
+
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; }
+  .stack > * + * { margin-top: 12px; }
+  button { cursor: pointer; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); padding: 10px 14px; border-radius: 8px; font-size: 14px; font-weight: 500; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.mic { background: var(--mic); border-color: var(--mic); color: #fff; width: 100%; font-size: 15px; }
+  button.mic.on { background: #2a1010; color: var(--mic); }
+  button.ghost { background: transparent; }
+  button.small { padding: 5px 9px; font-size: 12px; }
+  .drop { border: 2px dashed var(--border); border-radius: 10px; padding: 20px 14px; text-align: center; color: var(--muted); cursor: pointer; transition: border-color .15s, background .15s; }
+  .drop.over { border-color: var(--accent); background: rgba(79,140,255,.08); }
+  .drop input { display: none; }
+  .drop strong { color: var(--text); }
+  label.row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--muted); }
+  label.row output { color: var(--text); min-width: 46px; text-align: right; font-variant-numeric: tabular-nums; }
+  label.check { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--text); cursor: pointer; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
+  select { width: 100%; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px; font-size: 13px; }
+  .meter { height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+  .meter > div { height: 100%; width: 0; background: var(--accent-2); transition: width .05s linear; }
+  .progress { height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; display: none; }
+  .progress > div { height: 100%; width: 0; background: var(--file); transition: width .1s; }
+  .timeline { position: relative; height: 50px; background: var(--panel-2); border-radius: 8px; overflow: hidden; display: none; }
+  .timeline canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .timeline .seg { position: absolute; top: 0; bottom: 0; background: rgba(245,185,66,.35); border-left: 1px solid var(--file); border-right: 1px solid var(--file); cursor: pointer; }
+  .timeline .seg:hover { background: rgba(245,185,66,.6); }
+  .convo { min-height: 62vh; display: flex; flex-direction: column; }
+  .convo .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .convo .toolbar .spacer { flex: 1; }
+  .turns { display: flex; flex-direction: column; gap: 10px; flex: 1; }
+  .turn { display: grid; grid-template-columns: 42px 1fr; gap: 12px; padding: 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; animation: pop .18s ease-out; }
+  @keyframes pop { from { transform: translateY(6px); opacity: 0 } to { transform: none; opacity: 1 } }
+  .turn .badge { width: 42px; height: 42px; border-radius: 10px; display: grid; place-items: center; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-align: center; }
+  .turn.file .badge { background: rgba(245,185,66,.18); color: var(--file); }
+  .turn.mic .badge { background: rgba(255,92,92,.18); color: var(--mic); }
+  .turn.bot { background: rgba(167,139,250,.08); border-color: rgba(167,139,250,.3); }
+  .turn.bot .badge { background: rgba(167,139,250,.2); color: var(--bot); }
+  .turn .head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .turn .head b { color: var(--text); font-size: 13px; }
+  .turn .head .save { margin-left: auto; font-size: 11px; }
+  .turn .save.ok { color: var(--accent-2); } .turn .save.err { color: var(--danger); }
+  .text { font-size: 17px; margin: 8px 0 4px; white-space: pre-wrap; word-break: break-word; }
+  .text.pending { color: var(--muted); font-size: 14px; font-style: italic; }
+  .text.err { color: var(--danger); font-size: 13px; font-style: normal; }
+  .turn canvas { width: 100%; height: 34px; display: block; margin: 6px 0; border-radius: 6px; background: rgba(0,0,0,.2); }
+  .turn .ctl { display: flex; gap: 8px; align-items: center; }
+  .turn audio { height: 30px; flex: 1; min-width: 0; }
+  .empty { color: var(--muted); text-align: center; padding: 50px 20px; border: 1px dashed var(--border); border-radius: 10px; }
+  .live { display: none; padding: 10px 12px; border: 1px dashed var(--mic); border-radius: 10px; color: var(--mic); font-size: 13px; margin-top: 10px; }
+  .live.show { display: block; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .stat { background: var(--panel-2); border-radius: 8px; padding: 7px 10px; }
+  .stat .v { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat .k { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .err { color: var(--danger); font-size: 13px; white-space: pre-wrap; margin-top: 8px; }
+  .hint { color: var(--muted); font-size: 12px; }
+
+  summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; }
+  summary::-webkit-details-marker { display: none; }
+  summary h2 { margin: 0; }
+  summary::after { content: "▾"; color: var(--muted); font-size: 13px; transition: transform .15s; }
+  details[open] > summary::after { transform: rotate(180deg); }
+  details > summary { margin-bottom: 0; }
+  details[open] > summary { margin-bottom: 12px; }
+
+  /* ---------------------------------------------------------- phones ---- */
+  @media (max-width: 900px) {
+    body { -webkit-text-size-adjust: 100%; overscroll-behavior-y: contain; }
+    header {
+      position: sticky; top: 0; z-index: 40; gap: 8px; padding: 10px 14px;
+      padding-top: calc(10px + env(safe-area-inset-top));
+      background: rgba(23,27,33,.97); backdrop-filter: blur(8px);
+    }
+    header h1 { font-size: 15px; }
+    header .status { width: 100%; margin-left: 0; order: 3; font-size: 12px; }
+    .pill { font-size: 10px; padding: 2px 7px; }
+
+    main {
+      grid-template-columns: 1fr; gap: 12px; padding: 12px 14px;
+      /* room for the docked microphone bar */
+      padding-bottom: calc(150px + env(safe-area-inset-bottom));
+    }
+    /* the conversation is what you came for: put it first */
+    #sidebar { display: contents; }
+    .convo { order: 1; min-height: 50vh; padding: 12px; }
+    #sidebar > * { order: 2; margin-top: 0; }
+
+    /* the microphone docks to the bottom of the screen */
+    #micCard {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 45;
+      margin: 0; border-radius: 16px 16px 0 0; border-bottom: none;
+      padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+      background: rgba(23,27,33,.98); backdrop-filter: blur(10px);
+      box-shadow: 0 -8px 24px rgba(0,0,0,.45);
+    }
+    #micCard h2, #micCard .hint { display: none; }
+    #micCard button.mic { padding: 15px; font-size: 16px; border-radius: 12px; }
+    #micCard .meter { margin-top: 10px; }
+
+    /* comfortable touch targets, and 16px inputs so iOS does not zoom */
+    button { padding: 12px 14px; font-size: 15px; min-height: 44px; }
+    button.small { padding: 10px 12px; font-size: 13px; min-height: 42px; }
+    select, input[type=text] { font-size: 16px; min-height: 44px; }
+    input[type=range] { height: 34px; }
+    input[type=checkbox] { width: 22px; height: 22px; }
+    label.check { padding: 11px 0; font-size: 15px; min-height: 44px; }
+    summary { padding: 10px 0; min-height: 44px; }
+    .drop { padding: 26px 14px; }
+
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .convo .toolbar { gap: 6px; }
+    .convo .toolbar h2 { width: 100%; }
+    .convo .toolbar .spacer { display: none; }
+    .convo .toolbar button { flex: 1 1 auto; }
+
+    /* turns: badge shrinks, text and player take the width */
+    .turn { grid-template-columns: 36px 1fr; gap: 10px; padding: 10px; }
+    .turn .badge { width: 36px; height: 36px; font-size: 9px; }
+    .turn .head { font-size: 11px; gap: 6px; }
+    .turn .head .save { margin-left: 0; }
+    .turn .ctl { flex-wrap: wrap; }
+    .turn audio { width: 100%; flex: 1 1 100%; }
+    .text { font-size: 18px; }
+    .timeline { height: 44px; }
+  }
+
+  @media (max-width: 380px) {
+    .stats { grid-template-columns: 1fr 1fr; }
+    .turn { grid-template-columns: 1fr; }
+    .turn .badge { width: auto; height: 26px; justify-self: start; padding: 0 10px; }
+  }
+
+  /* pointer-coarse devices: no hover styling, bigger hit areas */
+  @media (hover: none) {
+    button:hover:not(:disabled) { border-color: var(--border); }
+    * { -webkit-tap-highlight-color: rgba(79,140,255,.2); }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Bangla Voice Conversation</h1>
+  <span class="pill" id="asrPill">ASR: checking…</span>
+  <span class="pill" id="llmPill">LLM: checking…</span>
+  <div class="status"><span class="dot" id="dot"></span><span id="statusText">loading VAD…</span></div>
+</header>
+
+<main>
+  <div class="stack" id="sidebar">
+    <div class="card stack">
+      <h2>1 · Upload audio</h2>
+      <label class="drop" id="drop">
+        <input type="file" id="fileInput" accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac,.webm" />
+        <div><strong>Drop an audio file</strong> or click to browse</div>
+        <div class="hint">wav · mp3 · m4a · ogg · flac · webm</div>
+      </label>
+      <div class="progress" id="fileProgress"><div></div></div>
+      <div class="timeline" id="timeline"><canvas id="tlCanvas"></canvas></div>
+      <div class="hint" id="fileInfo"></div>
+    </div>
+
+    <div class="card stack" id="micCard">
+      <h2>2 · Continue with microphone</h2>
+      <button class="mic" id="micBtn" disabled>🎙 Start listening</button>
+      <div class="meter"><div id="meter"></div></div>
+      <div class="hint">Each pause ends a turn: it is transcribed, then answered.</div>
+    </div>
+
+    <details class="card stack" id="modeCard" open>
+      <summary><h2>Conversation mode</h2></summary>
+      <label class="check"><input type="checkbox" id="doAsr" checked /> Transcribe turns (Bangla ASR)</label>
+      <label class="check"><input type="checkbox" id="doReply" checked /> Generate a reply after each turn</label>
+      <label class="check"><input type="checkbox" id="doSpeak" /> Speak the reply out loud</label>
+      <select id="llmModel"><option value="">default model</option></select>
+      <div class="hint">While a reply is spoken the microphone pauses, so the assistant does not hear itself.</div>
+    </details>
+
+    <details class="card stack" id="vadCard" open>
+      <summary><h2>VAD settings</h2></summary>
+      <label class="row">Speech threshold <output id="posOut">0.50</output></label>
+      <input type="range" id="posThr" min="0.1" max="0.95" step="0.05" value="0.5" />
+      <label class="row">Silence threshold <output id="negOut">0.35</output></label>
+      <input type="range" id="negThr" min="0.05" max="0.9" step="0.05" value="0.35" />
+      <label class="row">End-of-turn silence (ms) <output id="redOut">700</output></label>
+      <input type="range" id="redemption" min="100" max="2000" step="50" value="700" />
+      <label class="row">Min speech (ms) <output id="minOut">250</output></label>
+      <input type="range" id="minSpeech" min="50" max="1500" step="50" value="250" />
+      <label class="row">Pre-speech pad (ms) <output id="padOut">300</output></label>
+      <input type="range" id="prePad" min="0" max="1000" step="50" value="300" />
+      <div class="hint">Applies to the next file and the next mic start.</div>
+    </details>
+  </div>
+
+  <div class="card convo">
+    <div class="toolbar">
+      <h2 style="margin:0">Conversation</h2>
+      <span class="hint" id="sessionLabel"></span>
+      <span class="spacer"></span>
+      <button class="small ghost" id="replyBtn" disabled>💬 Reply now</button>
+      <button class="small ghost" id="exportJsonBtn" disabled>⬇ Transcript</button>
+      <button class="small ghost" id="exportWavBtn" disabled>⬇ Merged WAV</button>
+      <button class="small ghost" id="clearBtn" disabled>✕ Clear</button>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="v" id="stTurns">0</div><div class="k">turns</div></div>
+      <div class="stat"><div class="v" id="stSpeech">0.0s</div><div class="k">speech</div></div>
+      <div class="stat"><div class="v" id="stWords">0</div><div class="k">words</div></div>
+      <div class="stat"><div class="v" id="stAsr">–</div><div class="k">asr time</div></div>
+    </div>
+    <div style="height:12px"></div>
+    <div class="turns" id="turns">
+      <div class="empty" id="empty">No turns yet. Upload an audio file or start the microphone.</div>
+    </div>
+    <div class="live" id="live">● speaking… <span id="liveDur">0.0s</span></div>
+    <div class="err" id="err"></div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.wasm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/bundle.min.js"></script>
+<script>
+(() => {
+  const ORT_BASE = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/";
+  const VAD_BASE = "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/";
+  const SR = 16000;
+  const $ = (id) => document.getElementById(id);
+
+  const state = {
+    sessionId: null, turns: [], micVad: null, micOn: false,
+    micStartedAt: 0, speechStartedAt: 0, busy: false, replying: false, asrTimes: [],
+  };
+
+  const fmt = (ms) => (ms / 1000).toFixed(1) + "s";
+  const clock = (ms) => {
+    const s = Math.floor(ms / 1000);
+    return `${String(Math.floor(s / 60)).padStart(2,"0")}:${String(s % 60).padStart(2,"0")}.${Math.floor(ms % 1000 / 100)}`;
+  };
+  const setStatus = (t, c) => { $("statusText").textContent = t; $("dot").className = "dot " + (c || ""); };
+  const showErr = (e) => { $("err").textContent = e ? (e.message || String(e)) : ""; if (e) console.error(e); };
+
+  function vadOptions() {
+    return {
+      positiveSpeechThreshold: +$("posThr").value,
+      negativeSpeechThreshold: +$("negThr").value,
+      redemptionMs: +$("redemption").value,
+      minSpeechMs: +$("minSpeech").value,
+      preSpeechPadMs: +$("prePad").value,
+    };
+  }
+  for (const [id, out, fix] of [["posThr","posOut",2],["negThr","negOut",2],["redemption","redOut",0],["minSpeech","minOut",0],["prePad","padOut",0]])
+    $(id).addEventListener("input", () => $(out).textContent = (+$(id).value).toFixed(fix));
+
+  function drawWave(canvas, audio, color) {
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth || 600, h = canvas.clientHeight || 34;
+    canvas.width = w * dpr; canvas.height = h * dpr;
+    const ctx = canvas.getContext("2d"); ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, h); ctx.fillStyle = color;
+    const step = Math.max(1, Math.floor(audio.length / w));
+    for (let x = 0; x < w; x++) {
+      let peak = 0; const s = x * step, e = Math.min(audio.length, s + step);
+      for (let i = s; i < e; i++) { const v = Math.abs(audio[i]); if (v > peak) peak = v; }
+      const bh = Math.max(1, peak * h);
+      ctx.fillRect(x, (h - bh) / 2, 1, bh);
+    }
+  }
+
+  // ---------------- server ----------------
+  async function api(path, opts) {
+    const r = await fetch(path, opts);
+    if (!r.ok) throw new Error(`${opts?.method || "GET"} ${path} → ${r.status} ${await r.text()}`);
+    return r.json();
+  }
+  async function ensureSession() {
+    if (state.sessionId) return state.sessionId;
+    try {
+      const { session_id } = await api("/api/sessions", { method: "POST" });
+      state.sessionId = session_id;
+      $("sessionLabel").textContent = `session ${session_id}`;
+    } catch {
+      state.sessionId = "local";
+      $("sessionLabel").textContent = "server offline · no transcription";
+    }
+    return state.sessionId;
+  }
+
+  // ---------------- rendering ----------------
+  function addTurn({ source, origin, startMs, endMs, audio }) {
+    const wavBlob = new Blob([vad.utils.encodeWAV(audio, 1, SR, 1, 16)], { type: "audio/wav" });
+    const turn = { index: state.turns.length + 1, role: "user", source, origin, startMs, endMs,
+                   audio, wavBlob, url: URL.createObjectURL(wavBlob), text: null };
+    state.turns.push(turn);
+    $("empty").style.display = "none";
+
+    const el = document.createElement("div");
+    el.className = "turn " + source;
+    el.innerHTML = `
+      <div class="badge">${source === "file" ? "FILE" : "MIC"}<br>#${turn.index}</div>
+      <div>
+        <div class="head">
+          <b>Turn ${turn.index}</b>
+          <span>${source === "file" ? (origin || "file") : "microphone"}</span>
+          <span>${clock(startMs)} → ${clock(endMs)}</span>
+          <span>${fmt(endMs - startMs)}</span>
+          <span class="save">saving…</span>
+        </div>
+        <div class="text pending bn">transcribing…</div>
+        <canvas></canvas>
+        <div class="ctl">
+          <audio controls preload="metadata" src="${turn.url}"></audio>
+          <a download="turn-${String(turn.index).padStart(3,"0")}-${source}.wav" href="${turn.url}"><button class="small ghost">⬇</button></a>
+        </div>
+      </div>`;
+    $("turns").appendChild(el);
+    drawWave(el.querySelector("canvas"), audio, source === "file" ? "#f5b942" : "#ff5c5c");
+    el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    turn.el = el;
+    updateStats();
+    return turn;
+  }
+
+  function addBotTurn(text, meta) {
+    const turn = { index: state.turns.length + 1, role: "assistant", source: "llm", text };
+    state.turns.push(turn);
+    const el = document.createElement("div");
+    el.className = "turn bot";
+    el.innerHTML = `
+      <div class="badge">BOT<br>#${turn.index}</div>
+      <div>
+        <div class="head"><b>Assistant</b><span>${meta || ""}</span></div>
+        <div class="text bn"></div>
+      </div>`;
+    el.querySelector(".text").textContent = text;
+    $("turns").appendChild(el);
+    el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    updateStats();
+    return turn;
+  }
+
+  function updateStats() {
+    const n = state.turns.length;
+    const total = state.turns.filter(t => t.role === "user").reduce((a, t) => a + (t.endMs - t.startMs), 0);
+    const words = state.turns.reduce((a, t) => a + (t.text ? t.text.trim().split(/\s+/).filter(Boolean).length : 0), 0);
+    $("stTurns").textContent = n;
+    $("stSpeech").textContent = fmt(total);
+    $("stWords").textContent = words;
+    $("stAsr").textContent = state.asrTimes.length
+      ? Math.round(state.asrTimes.reduce((a, b) => a + b, 0) / state.asrTimes.length) + "ms" : "–";
+    for (const id of ["exportJsonBtn", "exportWavBtn", "clearBtn"]) $(id).disabled = n === 0;
+    $("replyBtn").disabled = !state.turns.some(t => t.text);
+  }
+
+  // ---------------- upload + transcribe ----------------
+  async function uploadTurn(turn) {
+    const tag = turn.el.querySelector(".save");
+    const txt = turn.el.querySelector(".text");
+    const sid = await ensureSession();
+    if (sid === "local") { tag.textContent = "not saved"; txt.textContent = "server offline"; txt.classList.add("err"); return; }
+    const fd = new FormData();
+    fd.append("audio", turn.wavBlob, "turn.wav");
+    fd.append("source", turn.source);
+    fd.append("start_ms", turn.startMs);
+    fd.append("end_ms", turn.endMs);
+    fd.append("origin", turn.origin || "");
+    fd.append("transcribe", $("doAsr").checked ? "true" : "false");
+    try {
+      const saved = await api(`/api/sessions/${sid}/turns`, { method: "POST", body: fd });
+      turn.file = saved.file; turn.text = saved.text;
+      tag.textContent = "saved ✓"; tag.classList.add("ok");
+      if (saved.asr_error) { txt.textContent = "ASR: " + saved.asr_error; txt.className = "text err"; }
+      else if (saved.text) { txt.textContent = saved.text; txt.className = "text bn"; }
+      else if (!$("doAsr").checked) { txt.textContent = "(transcription off)"; txt.className = "text pending"; }
+      else { txt.textContent = "(no speech recognised)"; txt.className = "text pending"; }
+      if (saved.asr_ms) { state.asrTimes.push(saved.asr_ms); turn.el.querySelector(".head").insertAdjacentHTML("beforeend", `<span>asr ${saved.asr_ms}ms</span>`); }
+      updateStats();
+    } catch (e) {
+      tag.textContent = "save failed"; tag.classList.add("err");
+      txt.textContent = String(e.message || e); txt.className = "text err";
+    }
+  }
+
+  // ---------------- reply generation ----------------
+  async function generateReply() {
+    if (state.replying) return;
+    const sid = await ensureSession();
+    if (sid === "local") return;
+    state.replying = true;
+    const prev = $("statusText").textContent;
+    setStatus("generating reply…", "thinking");
+    try {
+      const turn = await api(`/api/sessions/${sid}/reply`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: $("llmModel").value || null }),
+      });
+      addBotTurn(turn.text, `${turn.model} · ${turn.gen_ms}ms`);
+      if ($("doSpeak").checked) await speak(turn.text);
+    } catch (e) { showErr(e); }
+    finally { state.replying = false; setStatus(state.micOn ? "listening…" : "ready", state.micOn ? "listening" : "ready"); }
+  }
+
+  function speak(text) {
+    return new Promise((resolve) => {
+      if (!window.speechSynthesis) return resolve();
+      const wasListening = state.micOn;
+      if (wasListening && state.micVad) state.micVad.pause();   // don't transcribe ourselves
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "bn-BD";
+      const v = (speechSynthesis.getVoices() || []).find(v => /^bn|beng/i.test(v.lang));
+      if (v) u.voice = v;
+      let settled = false;
+      const done = () => {
+        if (settled) return; settled = true;
+        // only resume if the user has not stopped the mic in the meantime
+        if (wasListening && state.micOn && state.micVad) state.micVad.start();
+        resolve();
+      };
+      u.onend = done; u.onerror = done;
+      setTimeout(done, Math.max(8000, text.length * 120));      // guard against a stuck utterance
+      speechSynthesis.speak(u);
+    });
+  }
+
+  // ---------------- file → NonRealTimeVAD ----------------
+  const drop = $("drop");
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) processFile(e.dataTransfer.files[0]); });
+  $("fileInput").addEventListener("change", (e) => { if (e.target.files[0]) processFile(e.target.files[0]); e.target.value = ""; });
+
+  async function processFile(file) {
+    if (state.busy) return;
+    state.busy = true; showErr(null);
+    const prog = $("fileProgress"); prog.style.display = "block"; prog.firstElementChild.style.width = "0%";
+    setStatus(`decoding ${file.name}…`, "ready");
+    try {
+      const { audio: decoded, sampleRate } = await vad.utils.audioFileToArray(file);
+      // Pad with silence so speech that runs to the very end still gets closed
+      // and emitted as a segment instead of being dropped.
+      const audio = new Float32Array(decoded.length + Math.round(sampleRate * 0.7));
+      audio.set(decoded);
+      const durationMs = decoded.length / sampleRate * 1000;
+      $("fileInfo").textContent = `${file.name} · ${fmt(durationMs)} · ${sampleRate} Hz`;
+      const tl = $("timeline"); tl.style.display = "block";
+      tl.querySelectorAll(".seg").forEach((s) => s.remove());
+      drawWave($("tlCanvas"), decoded, "#4f8cff");
+
+      setStatus(`running VAD on ${file.name}…`, "ready");
+      const nrt = await vad.NonRealTimeVAD.new({
+        ...vadOptions(),
+        modelURL: VAD_BASE + "silero_vad_legacy.onnx",
+        ortConfig: (ort) => { ort.env.wasm.wasmPaths = ORT_BASE; ort.env.logLevel = "error"; },
+      });
+      const pending = [];
+      for await (const seg of nrt.run(audio, sampleRate)) {
+        const turn = addTurn({ source: "file", origin: file.name,
+          startMs: Math.min(seg.start, durationMs), endMs: Math.min(seg.end, durationMs), audio: seg.audio });
+        pending.push(uploadTurn(turn));                    // transcribe sequentially on the server
+        const s = document.createElement("div");
+        s.className = "seg"; s.title = `Turn ${turn.index}`;
+        s.style.left = (seg.start / durationMs * 100) + "%";
+        s.style.width = Math.max(0.3, (seg.end - seg.start) / durationMs * 100) + "%";
+        s.onclick = () => { const a = turn.el.querySelector("audio"); a.currentTime = 0; a.play(); };
+        tl.appendChild(s);
+        prog.firstElementChild.style.width = (seg.end / durationMs * 100) + "%";
+        await new Promise(requestAnimationFrame);
+      }
+      prog.firstElementChild.style.width = "100%";
+      setStatus(`${pending.length} segment(s) found · transcribing…`, "ready");
+      await Promise.all(pending);
+      setStatus(`${pending.length} segment(s) from ${file.name}`, "ready");
+      if ($("doReply").checked && pending.length) await generateReply();
+    } catch (e) { showErr(e); setStatus("file processing failed", ""); }
+    finally { state.busy = false; setTimeout(() => { prog.style.display = "none"; }, 800); }
+  }
+
+  // ---------------- mic → MicVAD ----------------
+  let liveTimer = null;
+  let wakeLock = null;
+
+  // Phones lock the screen mid-conversation and kill the audio graph.
+  async function holdScreenAwake() {
+    try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {}
+  }
+  function releaseScreen() { try { wakeLock?.release(); } catch {} wakeLock = null; }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && state.micOn && !wakeLock) holdScreenAwake();
+  });
+
+  // iOS only allows speech synthesis that starts inside a user gesture, so the
+  // first tap primes it with a silent utterance.
+  let speechPrimed = false;
+  function primeSpeech() {
+    if (speechPrimed || !window.speechSynthesis) return;
+    try {
+      const u = new SpeechSynthesisUtterance(" ");
+      u.volume = 0; speechSynthesis.speak(u); speechPrimed = true;
+    } catch {}
+  }
+
+  async function startMic() {
+    showErr(null);
+    primeSpeech();
+    $("micBtn").disabled = true; $("micBtn").textContent = "starting…";
+    try {
+      if (state.micVad) { try { state.micVad.destroy(); } catch {} state.micVad = null; }
+      state.micVad = await vad.MicVAD.new({
+        ...vadOptions(),
+        model: "v5",
+        baseAssetPath: VAD_BASE,
+        onnxWASMBasePath: ORT_BASE,
+        startOnLoad: false,
+        submitUserSpeechOnPause: false,
+        onFrameProcessed: (p) => { $("meter").style.width = (p.isSpeech * 100).toFixed(0) + "%"; },
+        onSpeechStart: () => {
+          state.speechStartedAt = performance.now() - state.micStartedAt;
+          setStatus("speech detected", "speaking");
+          $("live").classList.add("show");
+          liveTimer = setInterval(() => { $("liveDur").textContent = fmt(performance.now() - state.micStartedAt - state.speechStartedAt); }, 100);
+        },
+        onVADMisfire: () => { stopLive(); setStatus("listening… (too short)", "listening"); },
+        onSpeechEnd: async (audio) => {
+          stopLive();
+          const endMs = performance.now() - state.micStartedAt;
+          const startMs = Math.max(0, endMs - audio.length / SR * 1000);
+          const turn = addTurn({ source: "mic", origin: "", startMs, endMs, audio });
+          setStatus("transcribing…", "thinking");
+          await uploadTurn(turn);
+          if ($("doReply").checked && turn.text) await generateReply();
+          else if (state.micOn) setStatus("listening…", "listening");
+        },
+      });
+      state.micVad.start();
+      state.micOn = true; state.micStartedAt = performance.now();
+      holdScreenAwake();
+      $("micBtn").textContent = "⏹ Stop listening"; $("micBtn").classList.add("on");
+      setStatus("listening…", "listening");
+    } catch (e) {
+      showErr(e); setStatus("microphone unavailable", "");
+      $("micBtn").textContent = "🎙 Start listening";
+    } finally { $("micBtn").disabled = false; }
+  }
+  function stopLive() { $("live").classList.remove("show"); clearInterval(liveTimer); liveTimer = null; $("liveDur").textContent = "0.0s"; }
+  function stopMic() {
+    state.micOn = false;
+    releaseScreen();
+    if (state.micVad) { try { state.micVad.pause(); state.micVad.destroy(); } catch {} state.micVad = null; }
+    stopLive(); $("meter").style.width = "0%";
+    $("micBtn").textContent = "🎙 Start listening"; $("micBtn").classList.remove("on");
+    setStatus("ready", "ready");
+  }
+  $("micBtn").addEventListener("click", () => state.micOn ? stopMic() : startMic());
+
+  // ---------------- toolbar ----------------
+  $("replyBtn").addEventListener("click", generateReply);
+  const download = (blob, name) => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); };
+  $("exportJsonBtn").addEventListener("click", () => {
+    const rows = state.turns.map((t) => ({
+      index: t.index, role: t.role, source: t.source, origin: t.origin || null,
+      start_ms: t.startMs != null ? +t.startMs.toFixed(1) : null,
+      end_ms: t.endMs != null ? +t.endMs.toFixed(1) : null,
+      text: t.text || null, file: t.file || null,
+    }));
+    download(new Blob([JSON.stringify({ session_id: state.sessionId, sample_rate: SR, turns: rows }, null, 2)], { type: "application/json;charset=utf-8" }), `conversation-${state.sessionId || "local"}.json`);
+  });
+  $("exportWavBtn").addEventListener("click", () => {
+    const user = state.turns.filter(t => t.audio);
+    const gap = new Float32Array(SR * 0.4);
+    const merged = new Float32Array(user.reduce((a, t) => a + t.audio.length + gap.length, 0));
+    let off = 0;
+    for (const t of user) { merged.set(t.audio, off); off += t.audio.length + gap.length; }
+    download(new Blob([vad.utils.encodeWAV(merged, 1, SR, 1, 16)], { type: "audio/wav" }), `conversation-${state.sessionId || "local"}.wav`);
+  });
+  $("clearBtn").addEventListener("click", async () => {
+    if (state.micOn) stopMic();
+    for (const t of state.turns) if (t.url) URL.revokeObjectURL(t.url);
+    state.turns = []; state.asrTimes = [];
+    $("turns").querySelectorAll(".turn").forEach((e) => e.remove());
+    $("empty").style.display = ""; $("timeline").style.display = "none"; $("fileInfo").textContent = "";
+    updateStats();
+    if (state.sessionId && state.sessionId !== "local") { try { await fetch(`/api/sessions/${state.sessionId}`, { method: "DELETE" }); } catch {} }
+    state.sessionId = null; $("sessionLabel").textContent = "";
+  });
+
+  // ---------------- boot ----------------
+  async function pollHealth() {
+    try {
+      const h = await api("/api/health");
+      const a = $("asrPill");
+      if (h.asr.error) { a.textContent = "ASR: failed"; a.className = "pill bad"; showErr(new Error("ASR: " + h.asr.error)); }
+      else if (h.asr.loaded) { a.textContent = `ASR ready (${h.asr.device || "cpu"})`; a.className = "pill ok"; }
+      else { a.textContent = "ASR: loading model…"; a.className = "pill wait"; setTimeout(pollHealth, 3000); }
+      const l = $("llmPill");
+      l.textContent = h.llm.available ? `LLM: ${h.llm.model}` : "LLM: offline";
+      l.className = "pill " + (h.llm.available ? "ok" : "bad");
+      const sel = $("llmModel");
+      if (sel.options.length <= 1 && h.llm.models?.length) {
+        for (const m of h.llm.models) {
+          const o = document.createElement("option");
+          o.value = m; o.textContent = m; o.selected = m === h.llm.model;
+          sel.appendChild(o);
+        }
+      }
+    } catch { $("asrPill").textContent = "server offline"; $("asrPill").className = "pill bad"; }
+  }
+
+  // On a phone the settings start folded away so the conversation is what you see.
+  let autoToggling = false;                 // a toggle event fires either way,
+  function layoutForScreen() {              // so tell ours apart from a real tap
+    const small = window.matchMedia("(max-width: 900px)").matches;
+    autoToggling = true;
+    for (const id of ["modeCard", "vadCard"]) {
+      const d = $(id);
+      if (!d.dataset.touched) d.open = !small;
+    }
+    autoToggling = false;
+  }
+  for (const id of ["modeCard", "vadCard"]) {
+    $(id).addEventListener("toggle", () => { if (!autoToggling) $(id).dataset.touched = "1"; });
+  }
+  window.addEventListener("resize", layoutForScreen);
+
+  (async () => {
+    layoutForScreen();
+    pollHealth();
+    try {
+      if (!window.vad) throw new Error("vad-web failed to load from CDN");
+      await vad.NonRealTimeVAD.new({ modelURL: VAD_BASE + "silero_vad_legacy.onnx",
+        ortConfig: (ort) => { ort.env.wasm.wasmPaths = ORT_BASE; ort.env.logLevel = "error"; } });
+      setStatus("ready", "ready");
+      $("micBtn").disabled = false;
+      if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+        $("micBtn").disabled = true;
+        showErr(new Error("Microphone needs http://localhost:8000 or https."));
+      }
+    } catch (e) { showErr(e); setStatus("VAD failed to load", ""); }
+  })();
+})();
+</script>
+</body>
+</html>
