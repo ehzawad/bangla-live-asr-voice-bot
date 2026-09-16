@@ -1,7 +1,6 @@
 """End-to-end check of the server pipeline without a browser.
 
-Posts a WAV as a conversation turn, prints the Bengali transcript, then asks
-for a generated reply.
+Posts a WAV as a conversation turn, prints the Bengali transcript, and verifies the saved turn.
 
     .venv/bin/python test_pipeline.py [audio.wav]
 
@@ -59,7 +58,6 @@ def main() -> int:
         time.sleep(5)
     h = get("/api/health")
     print("  asr:", h["asr"])
-    print("  llm:", {k: h["llm"][k] for k in ("available", "model")})
     if h["asr"]["error"]:
         return 1
 
@@ -80,8 +78,8 @@ def main() -> int:
     if ref.exists() and wav.name == "sample_bn.wav":
         print("reference words:", " ".join(json.loads(ref.read_text())))
 
-    reply = post(f"/api/sessions/{sid}/reply", b"{}", "application/json")
-    print(f"\nreply ({reply['model']}, {reply['gen_ms']} ms): {reply['text']!r}")
+    saved = get(f"/api/sessions/{sid}")["turns"]
+    assert saved and saved[-1]["text"] == turn["text"]
     print(f"\ntotal {time.perf_counter() - t0:.1f}s · saved in conversations/{sid}/")
     return 0
 

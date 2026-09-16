@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#0f1216" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<title>Bangla Voice Conversation</title>
+<title>Bangla Speech to Text</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;600&display=swap" rel="stylesheet">
@@ -176,9 +176,8 @@
 </head>
 <body>
 <header>
-  <h1>Bangla Voice Conversation</h1>
+  <h1>Bangla Speech to Text</h1>
   <span class="pill" id="asrPill">ASR: checking…</span>
-  <span class="pill" id="llmPill">LLM: checking…</span>
   <div class="status"><span class="dot" id="dot"></span><span id="statusText">loading VAD…</span></div>
 </header>
 
@@ -200,16 +199,12 @@
       <h2>2 · Continue with microphone</h2>
       <button class="mic" id="micBtn" disabled>🎙 Start listening</button>
       <div class="meter"><div id="meter"></div></div>
-      <div class="hint">Live text updates while you speak. Each pause finalizes a turn, then the bot replies.</div>
+      <div class="hint">Live Bengali text updates while you speak. Each pause finalizes the transcript.</div>
     </div>
 
     <details class="card stack" id="modeCard" open>
-      <summary><h2>Conversation mode</h2></summary>
+      <summary><h2>Transcription settings</h2></summary>
       <label class="check"><input type="checkbox" id="doAsr" checked /> Transcribe turns (Bangla ASR)</label>
-      <label class="check"><input type="checkbox" id="doReply" checked /> Generate a reply after each turn</label>
-      <label class="check"><input type="checkbox" id="doSpeak" /> Speak the reply out loud</label>
-      <select id="llmModel"><option value="">default model</option></select>
-      <div class="hint">While a reply is spoken the microphone pauses, so the assistant does not hear itself.</div>
     </details>
 
     <details class="card stack" id="vadCard" open>
@@ -235,7 +230,6 @@
       <h2 style="margin:0">Conversation</h2>
       <span class="hint" id="sessionLabel"></span>
       <span class="spacer"></span>
-      <button class="small ghost" id="replyBtn" disabled>💬 Reply now</button>
       <button class="small ghost" id="exportJsonBtn" disabled>⬇ Transcript</button>
       <button class="small ghost" id="exportWavBtn" disabled>⬇ Merged WAV</button>
       <button class="small ghost" id="clearBtn" disabled>✕ Clear</button>
@@ -267,7 +261,7 @@
 
   const state = {
     sessionId: null, turns: [], micVad: null, micOn: false,
-    micStartedAt: 0, speechStartedAt: 0, busy: false, replying: false, asrTimes: [],
+    micStartedAt: 0, speechStartedAt: 0, busy: false, asrTimes: [],
   };
 
   const preview = new LiveTranscript(
@@ -365,24 +359,6 @@
     return turn;
   }
 
-  function addBotTurn(text, meta) {
-    const turn = { index: state.turns.length + 1, role: "assistant", source: "llm", text };
-    state.turns.push(turn);
-    const el = document.createElement("div");
-    el.className = "turn bot";
-    el.innerHTML = `
-      <div class="badge">BOT<br>#${turn.index}</div>
-      <div>
-        <div class="head"><b>Assistant</b><span>${meta || ""}</span></div>
-        <div class="text bn"></div>
-      </div>`;
-    el.querySelector(".text").textContent = text;
-    $("turns").appendChild(el);
-    el.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    updateStats();
-    return turn;
-  }
-
   function updateStats() {
     const n = state.turns.length;
     const total = state.turns.filter(t => t.role === "user").reduce((a, t) => a + (t.endMs - t.startMs), 0);
@@ -393,7 +369,6 @@
     $("stAsr").textContent = state.asrTimes.length
       ? Math.round(state.asrTimes.reduce((a, b) => a + b, 0) / state.asrTimes.length) + "ms" : "–";
     for (const id of ["exportJsonBtn", "exportWavBtn", "clearBtn"]) $(id).disabled = n === 0;
-    $("replyBtn").disabled = !state.turns.some(t => t.text);
   }
 
   // ---------------- upload + transcribe ----------------
@@ -423,47 +398,6 @@
       tag.textContent = "save failed"; tag.classList.add("err");
       txt.textContent = String(e.message || e); txt.className = "text err";
     }
-  }
-
-  // ---------------- reply generation ----------------
-  async function generateReply() {
-    if (state.replying) return;
-    const sid = await ensureSession();
-    if (sid === "local") return;
-    state.replying = true;
-    const prev = $("statusText").textContent;
-    setStatus("generating reply…", "thinking");
-    try {
-      const turn = await api(`/api/sessions/${sid}/reply`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: $("llmModel").value || null }),
-      });
-      addBotTurn(turn.text, `${turn.model} · ${turn.gen_ms}ms`);
-      if ($("doSpeak").checked) await speak(turn.text);
-    } catch (e) { showErr(e); }
-    finally { state.replying = false; setStatus(state.micOn ? "listening…" : "ready", state.micOn ? "listening" : "ready"); }
-  }
-
-  async function speak(text) {
-    if (!window.speechSynthesis) return;
-    const wasListening = state.micOn;
-    if (wasListening && state.micVad) await state.micVad.pause();
-    return new Promise((resolve) => {   // don't transcribe ourselves
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = "bn-BD";
-      const v = (speechSynthesis.getVoices() || []).find(v => /^bn|beng/i.test(v.lang));
-      if (v) u.voice = v;
-      let settled = false;
-      const done = () => {
-        if (settled) return; settled = true;
-        // only resume if the user has not stopped the mic in the meantime
-        if (wasListening && state.micOn && state.micVad) state.micVad.start().catch(showErr);
-        resolve();
-      };
-      u.onend = done; u.onerror = done;
-      setTimeout(done, Math.max(8000, text.length * 120));      // guard against a stuck utterance
-      speechSynthesis.speak(u);
-    });
   }
 
   // ---------------- file → NonRealTimeVAD ----------------
@@ -514,7 +448,6 @@
       setStatus(`${pending.length} segment(s) found · transcribing…`, "ready");
       await Promise.all(pending);
       setStatus(`${pending.length} segment(s) from ${file.name}`, "ready");
-      if ($("doReply").checked && pending.length) await generateReply();
     } catch (e) { showErr(e); setStatus("file processing failed", ""); }
     finally { state.busy = false; setTimeout(() => { prog.style.display = "none"; }, 800); }
   }
@@ -532,20 +465,8 @@
     if (document.visibilityState === "visible" && state.micOn && !wakeLock) holdScreenAwake();
   });
 
-  // iOS only allows speech synthesis that starts inside a user gesture, so the
-  // first tap primes it with a silent utterance.
-  let speechPrimed = false;
-  function primeSpeech() {
-    if (speechPrimed || !window.speechSynthesis) return;
-    try {
-      const u = new SpeechSynthesisUtterance(" ");
-      u.volume = 0; speechSynthesis.speak(u); speechPrimed = true;
-    } catch {}
-  }
-
   async function startMic() {
     showErr(null);
-    primeSpeech();
     preview.connect();
     $("micBtn").disabled = true; $("micBtn").textContent = "starting…";
     try {
@@ -578,8 +499,7 @@
           setStatus("transcribing…", "thinking");
           turnQueue = turnQueue.then(async () => {
             await uploadTurn(turn);
-            if ($("doReply").checked && turn.text) await generateReply();
-            else if (state.micOn) setStatus("listening…", "listening");
+            if (state.micOn) setStatus("listening…", "listening");
           }).catch(showErr);
         },
       });
@@ -609,7 +529,6 @@
   $("micBtn").addEventListener("click", () => state.micOn ? stopMic() : startMic());
 
   // ---------------- toolbar ----------------
-  $("replyBtn").addEventListener("click", generateReply);
   const download = (blob, name) => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); };
   $("exportJsonBtn").addEventListener("click", () => {
     const rows = state.turns.map((t) => ({
@@ -648,17 +567,6 @@
       if (h.asr.error) { a.textContent = "ASR: failed"; a.className = "pill bad"; showErr(new Error("ASR: " + h.asr.error)); }
       else if (h.asr.loaded) { a.textContent = `ASR ready (${h.asr.device || "cpu"})`; a.className = "pill ok"; }
       else { a.textContent = "ASR: loading model…"; a.className = "pill wait"; setTimeout(pollHealth, 3000); }
-      const l = $("llmPill");
-      l.textContent = h.llm.available ? `LLM: ${h.llm.model}` : "LLM: offline";
-      l.className = "pill " + (h.llm.available ? "ok" : "bad");
-      const sel = $("llmModel");
-      if (sel.options.length <= 1 && h.llm.models?.length) {
-        for (const m of h.llm.models) {
-          const o = document.createElement("option");
-          o.value = m; o.textContent = m; o.selected = m === h.llm.model;
-          sel.appendChild(o);
-        }
-      }
     } catch { $("asrPill").textContent = "server offline"; $("asrPill").className = "pill bad"; }
   }
 
