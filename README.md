@@ -1,3 +1,40 @@
+# Bengali voice bot — `bot-end-to-end`
+
+Microphone → browser Silero VAD → live Bengali ASR previews → final transcript
+at each pause → local Ollama reply → optional browser speech playback.
+
+This branch includes the complete conversation bot. Switch to `asr-text-only`
+for transcription without Ollama, generated replies, or speech playback.
+Stop the server before switching branches, then restart it with `./run.sh`.
+
+## Live text
+
+The microphone sends a rolling audio snapshot over `/api/transcribe/live`
+roughly once per second, with one request in flight. The existing pretrained
+FastConformer-CTC model decodes each snapshot; it is not a native streaming
+model. Previews may change and show at most the latest 20 seconds. At a pause,
+the full speech segment is transcribed and saved as the final turn. Stopping
+the microphone submits the current speech segment too. Previews are temporary
+and are not saved as conversation turns.
+
+Replies currently arrive as complete text after each finalized turn. Spoken
+playback uses an installed browser voice; Bengali voice availability depends
+on the device. Frontend libraries and fonts load from CDNs, and the ASR model
+needs an initial download. No training dataset is needed.
+
+## Developer checks
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+node tests/live.test.cjs
+```
+
+The automated checks use mocked ASR for repeatable protocol and storage tests.
+For real model inference, start the app and run `test_pipeline.py` below.
+Recordings, certificates, and `.venv` are excluded from Git.
+
+---
+
 # Bangla Voice Conversation (VAD → ASR → reply)
 
 Upload an audio file or talk into the microphone. Silero VAD cuts speech into

@@ -200,7 +200,7 @@
       <h2>2 · Continue with microphone</h2>
       <button class="mic" id="micBtn" disabled>🎙 Start listening</button>
       <div class="meter"><div id="meter"></div></div>
-      <div class="hint">Each pause ends a turn: it is transcribed, then answered.</div>
+      <div class="hint">Live text updates while you speak. Each pause finalizes a turn, then the bot replies.</div>
     </div>
 
     <details class="card stack" id="modeCard" open>
@@ -229,6 +229,8 @@
   </div>
 
   <div class="card convo">
+    <div class="hint">Live preview · recent speech · may change</div>
+    <div id="partialText" class="bn" role="status" aria-live="polite"></div>
     <div class="toolbar">
       <h2 style="margin:0">Conversation</h2>
       <span class="hint" id="sessionLabel"></span>
@@ -255,6 +257,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.wasm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/bundle.min.js"></script>
+<script src="/static/live.js"></script>
 <script>
 (() => {
   const ORT_BASE = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/";
@@ -266,6 +269,12 @@
     sessionId: null, turns: [], micVad: null, micOn: false,
     micStartedAt: 0, speechStartedAt: 0, busy: false, replying: false, asrTimes: [],
   };
+
+  const preview = new LiveTranscript(
+    text => { $("partialText").textContent = text; },
+    audio => vad.utils.encodeWAV(audio, 1, SR, 1, 16),
+  );
+  let turnQueue = Promise.resolve();
 
   const fmt = (ms) => (ms / 1000).toFixed(1) + "s";
   const clock = (ms) => {
@@ -537,6 +546,7 @@
   async function startMic() {
     showErr(null);
     primeSpeech();
+    preview.connect();
     $("micBtn").disabled = true; $("micBtn").textContent = "starting…";
     try {
       if (state.micVad) { try { state.micVad.destroy(); } catch {} state.micVad = null; }
@@ -546,38 +556,47 @@
         baseAssetPath: VAD_BASE,
         onnxWASMBasePath: ORT_BASE,
         startOnLoad: false,
-        submitUserSpeechOnPause: false,
-        onFrameProcessed: (p) => { $("meter").style.width = (p.isSpeech * 100).toFixed(0) + "%"; },
+        submitUserSpeechOnPause: true,
+        onFrameProcessed: (p, frame) => {
+          $("meter").style.width = (p.isSpeech * 100).toFixed(0) + "%";
+          if ($("doAsr").checked) preview.frame(frame);
+        },
         onSpeechStart: () => {
+          preview.begin();
           state.speechStartedAt = performance.now() - state.micStartedAt;
           setStatus("speech detected", "speaking");
           $("live").classList.add("show");
           liveTimer = setInterval(() => { $("liveDur").textContent = fmt(performance.now() - state.micStartedAt - state.speechStartedAt); }, 100);
         },
-        onVADMisfire: () => { stopLive(); setStatus("listening… (too short)", "listening"); },
-        onSpeechEnd: async (audio) => {
+        onVADMisfire: () => { preview.end(); stopLive(); setStatus("listening… (too short)", "listening"); },
+        onSpeechEnd: (audio) => {
+          preview.end();
           stopLive();
           const endMs = performance.now() - state.micStartedAt;
           const startMs = Math.max(0, endMs - audio.length / SR * 1000);
           const turn = addTurn({ source: "mic", origin: "", startMs, endMs, audio });
           setStatus("transcribing…", "thinking");
-          await uploadTurn(turn);
-          if ($("doReply").checked && turn.text) await generateReply();
-          else if (state.micOn) setStatus("listening…", "listening");
+          turnQueue = turnQueue.then(async () => {
+            await uploadTurn(turn);
+            if ($("doReply").checked && turn.text) await generateReply();
+            else if (state.micOn) setStatus("listening…", "listening");
+          }).catch(showErr);
         },
       });
-      state.micVad.start();
+      await state.micVad.start();
       state.micOn = true; state.micStartedAt = performance.now();
       holdScreenAwake();
       $("micBtn").textContent = "⏹ Stop listening"; $("micBtn").classList.add("on");
       setStatus("listening…", "listening");
     } catch (e) {
+      preview.close();
       showErr(e); setStatus("microphone unavailable", "");
       $("micBtn").textContent = "🎙 Start listening";
     } finally { $("micBtn").disabled = false; }
   }
   function stopLive() { $("live").classList.remove("show"); clearInterval(liveTimer); liveTimer = null; $("liveDur").textContent = "0.0s"; }
   function stopMic() {
+    preview.close();
     state.micOn = false;
     releaseScreen();
     if (state.micVad) { try { state.micVad.pause(); state.micVad.destroy(); } catch {} state.micVad = null; }
@@ -609,6 +628,7 @@
   });
   $("clearBtn").addEventListener("click", async () => {
     if (state.micOn) stopMic();
+    await turnQueue;
     for (const t of state.turns) if (t.url) URL.revokeObjectURL(t.url);
     state.turns = []; state.asrTimes = [];
     $("turns").querySelectorAll(".turn").forEach((e) => e.remove());

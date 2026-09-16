@@ -29,6 +29,7 @@ from starlette.concurrency import run_in_threadpool
 
 import asr
 import llm
+from streaming import router as streaming_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 log = logging.getLogger("server")
@@ -56,7 +57,8 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="VAD Conversation", lifespan=lifespan)
+app = FastAPI(title="Bengali Voice Bot", lifespan=lifespan)
+app.include_router(streaming_router)
 
 
 # ---------------------------------------------------------------- storage --
@@ -132,6 +134,8 @@ async def add_turn(
     origin: str = Form(""),
     transcribe: bool = Form(True),
 ):
+    if source not in {"file", "mic"}:
+        raise HTTPException(400, "source must be file or mic")
     d = _session_dir(session_id, create=True)
     blob = await audio.read()
 
