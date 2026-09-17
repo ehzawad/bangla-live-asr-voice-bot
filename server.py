@@ -19,16 +19,18 @@ import re
 import time
 import uuid
 from contextlib import asynccontextmanager
+from collections import deque
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 import asr
 import llm
+import tts
 from streaming import router as streaming_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -45,6 +47,8 @@ WAV_NAME = re.compile(r"^turn-\d{4}-(file|mic)\.wav$")
 # One writer at a time per session: mic turns, file turns and replies can all
 # land concurrently, and each one appends to the same turns.json.
 _locks: dict[str, asyncio.Lock] = {}
+_replies: dict[tuple[str, str], asyncio.Task] = {}
+_interrupted: dict[str, deque] = {}
 
 
 def _lock(session_id: str) -> asyncio.Lock:
@@ -187,34 +191,99 @@ async def add_turn(
 
 class ReplyIn(BaseModel):
     model: str | None = None
+    request_id: str = Field(default_factory=lambda: uuid.uuid4().hex, max_length=64)
+
+
+class SpeechIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
+@app.post("/api/speech")
+async def speech(body: SpeechIn):
+    try:
+        audio = await tts.synthesize(body.text)
+    except (RuntimeError, OSError, TimeoutError) as exc:
+        raise HTTPException(503, str(exc))
+    return Response(audio, media_type="audio/wav")
+
+
+class InterruptIn(BaseModel):
+    request_id: str = Field(min_length=1, max_length=64)
+
+
+@app.post("/api/sessions/{session_id}/interrupt")
+async def interrupt_reply(session_id: str, body: InterruptIn):
+    d = _session_dir(session_id)
+    async with _lock(session_id):
+        _interrupted.setdefault(session_id, deque(maxlen=128)).append(body.request_id)
+        task = _replies.get((session_id, body.request_id))
+        if task:
+            task.cancel()
+        turns = _load(d)
+        for turn in turns:
+            if turn.get("request_id") == body.request_id:
+                turn["interrupted"] = True
+        _save(d, turns)
+    return {"ok": True}
 
 
 @app.post("/api/sessions/{session_id}/reply")
-async def make_reply(session_id: str, body: ReplyIn | None = None):
+async def make_reply(session_id: str, request: Request, body: ReplyIn | None = None):
     """Generate an assistant reply from everything said so far."""
     d = _session_dir(session_id)
+    body = body or ReplyIn()
+    key = (session_id, body.request_id)
+    if body.request_id in _interrupted.get(session_id, ()):
+        raise HTTPException(409, "reply interrupted")
+    if key in _replies:
+        raise HTTPException(409, "reply already in progress")
     turns = _load(d)
+    user_index = max((t["index"] for t in turns if t.get("role", "user") == "user"), default=0)
     history = [
         {"role": t.get("role", "user"), "content": t["text"]}
-        for t in turns if t.get("text")
+        for t in turns if t.get("text") and not t.get("interrupted")
     ]
     if not history:
         raise HTTPException(400, "nothing transcribed yet")
 
     t0 = time.perf_counter()
+    task = asyncio.create_task(llm.reply_async(history, body.model))
+    _replies[key] = task
     try:
-        text = await run_in_threadpool(llm.reply, history, (body.model if body else None))
+        while not task.done():
+            await asyncio.wait({task}, timeout=0.1)
+            if await request.is_disconnected():
+                task.cancel()
+                raise HTTPException(499, "client disconnected")
+        text = await task
+    except asyncio.CancelledError:
+        if task.cancelled():
+            raise HTTPException(409, "reply interrupted")
+        raise
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(503, str(e))
+    finally:
+        _replies.pop(key, None)
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
     async with _lock(session_id):
+        if not d.exists() or body.request_id in _interrupted.get(session_id, ()):
+            raise HTTPException(409, "reply interrupted")
         turns = _load(d)
+        latest_user = max((t["index"] for t in turns if t.get("role", "user") == "user"), default=0)
+        if latest_user != user_index:
+            raise HTTPException(409, "new speech superseded this reply")
         turn = {
             "index": len(turns) + 1,
             "role": "assistant",
             "source": "llm",
             "model": (body.model if body and body.model else llm.MODEL),
             "text": text,
+            "request_id": body.request_id,
             "gen_ms": round((time.perf_counter() - t0) * 1000),
             "saved_at": time.time(),
         }
@@ -235,8 +304,12 @@ def get_turn_audio(session_id: str, fname: str):
 
 
 @app.delete("/api/sessions/{session_id}")
-def clear_session(session_id: str):
+async def clear_session(session_id: str):
     d = _session_dir(session_id)
+    for (sid, _), task in list(_replies.items()):
+        if sid == session_id:
+            task.cancel()
+    _interrupted.pop(session_id, None)
     for p in d.iterdir():
         p.unlink()
     d.rmdir()

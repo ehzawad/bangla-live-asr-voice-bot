@@ -10,6 +10,8 @@ import os
 import urllib.error
 import urllib.request
 
+import httpx
+
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 MODEL = os.environ.get("CTC_LLM_MODEL", "gemma4:e2b")
 
@@ -60,3 +62,17 @@ def reply(history: list[dict], model: str | None = None, timeout: float = 180.0)
     if "</think>" in text:
         text = text.split("</think>", 1)[1]
     return text.strip()
+
+
+async def reply_async(history: list[dict], model: str | None = None) -> str:
+    """Cancellable request: interruption closes the connection to Ollama."""
+    payload = {
+        "model": model or MODEL, "stream": False, "think": False,
+        "options": {"temperature": 0.6, "num_predict": 160},
+        "messages": [{"role": "system", "content": SYSTEM}, *history],
+    }
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        response = await client.post(f"{OLLAMA}/api/chat", json=payload)
+        response.raise_for_status()
+        text = (response.json().get("message") or {}).get("content", "")
+    return text.split("</think>")[-1].strip()

@@ -7,30 +7,53 @@ This branch includes the complete conversation bot. Switch to `asr-text-only`
 for transcription without Ollama, generated replies, or speech playback.
 Stop the server before switching branches, then restart it with `./run.sh`.
 
-## Live text
+## Duplex conversation and natural pauses
 
-The microphone sends a rolling audio snapshot over `/api/transcribe/live`
-roughly once per second, with one request in flight. The existing pretrained
-FastConformer-CTC model decodes each snapshot; it is not a native streaming
-model. Previews may change and show at most the latest 20 seconds. At a pause,
-the full speech segment is transcribed and saved as the final turn. Stopping
-the microphone submits the current speech segment too. Previews are temporary
-and are not saved as conversation turns.
+After **Start listening**, the microphone stays active during transcription,
+generation, and spoken replies. Confirmed speech (at least 250 ms by default)
+interrupts playback and cancels the pending Ollama request. Interrupted replies
+are marked and excluded from later prompt history. **Stop listening** stops
+playback and saves any pending user speech without generating another reply.
 
-Replies currently arrive as complete text after each finalized turn. Spoken
-playback uses an installed browser voice; Bengali voice availability depends
-on the device. Frontend libraries and fonts load from CDNs, and the ASR model
-needs an initial download. No training dataset is needed.
+Silero VAD identifies speech frames. A separate timing algorithm joins speech
+segments across thinking pauses. It normally waits about 800 ms of silence,
+about 1200 ms after short fragments, and about 1800 ms after connectives such
+as “কিন্তু” or “কারণ”. It also adjusts to recent within-turn pauses, with a
+2400 ms ceiling. The baseline is adjustable in VAD settings. These are
+heuristics using the latest available ASR preview, not a semantic end-of-turn
+model; they cannot always distinguish a thinking pause from a finished thought.
+
+Live text uses rolling snapshots over `/api/transcribe/live`, about once a
+second with one request in flight. FastConformer-CTC decodes each snapshot;
+this is not native streaming ASR. Previews may change and show at most the
+latest 20 seconds. Final merged speech is transcribed and saved before the bot
+replies. Replies currently arrive as complete text, not streamed tokens.
+
+Bengali speech uses an installed browser voice when available, otherwise a
+local eSpeak NG fallback. The fallback is synthetic, not a neural voice.
+Install it on Ubuntu/Debian with `sudo apt install espeak-ng`, or run
+`./setup_tts.sh` for a user-local installation without sudo. `CTC_ESPEAK` can
+point to another eSpeak NG executable. Audio capture requests echo cancellation
+and noise suppression. Speaker feedback can still trigger VAD; headphones are
+recommended for reliable interruption. Background tabs and mobile operating
+systems can suspend microphone access; listening lasts while the page remains
+active and permission is granted.
+
+Frontend libraries and fonts load from CDNs; ASR needs an initial model
+download. No training dataset or additional pause-detection model is required.
 
 ## Developer checks
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
 node tests/live.test.cjs
+node tests/turn-taking.test.cjs
 ```
 
 The automated checks use mocked ASR for repeatable protocol and storage tests.
 For real model inference, start the app and run `test_pipeline.py` below.
+The optional `tests/browser_duplex.py` test uses Playwright and installed Chrome
+with synthetic VAD events to verify browser interruption and playback control.
 Recordings, certificates, and `.venv` are excluded from Git.
 
 ---
@@ -46,7 +69,7 @@ model, and a local LLM writes a reply. Everything runs on this machine.
 | voice activity detection | Silero VAD via `@ricky0123/vad-web` (ONNX runtime, WASM) | browser |
 | speech to text | [`ehzawad/stt_bn_fastconformer_ctc`](https://huggingface.co/ehzawad/stt_bn_fastconformer_ctc) (NeMo, 115 M params) | server, GPU if free |
 | text generation | Ollama chat model, default `gemma4:e2b` | localhost:11434 |
-| speech out (optional) | browser `speechSynthesis`, `bn-BD` voice if installed | browser |
+| speech out | Bengali browser voice, or local eSpeak NG fallback | browser / server |
 
 ## Setup
 
@@ -57,7 +80,7 @@ the newest release NeMo runs on here:
 uv venv --python 3.14 .venv
 uv pip install --index-strategy unsafe-best-match \
   --extra-index-url https://download.pytorch.org/whl/cu128 \
-  "torch==2.9.0+cu128" "nemo_toolkit[asr]==2.7.3" fastapi uvicorn "websockets>=14,<17" python-multipart soundfile
+  "torch==2.9.0+cu128" "nemo_toolkit[asr]==2.7.3" fastapi uvicorn "websockets>=14,<17" python-multipart soundfile httpx
 ```
 
 Text generation needs Ollama with a chat model:
@@ -111,8 +134,8 @@ Settings: `CTC_PORT` changes the port, `CTC_HOST` the bind address,
    waveform, a player and its Bengali transcript. Clicking a highlighted region
    on the timeline plays that turn.
 2. **Start listening** to continue by voice. Speak, pause, and the turn is
-   transcribed and answered. Turning on *Speak the reply* reads it back and
-   pauses the microphone while it talks, so the assistant does not hear itself.
+   transcribed and answered. *Speak the reply* is enabled by default. The
+   microphone stays active so you can interrupt and continue speaking.
 3. **Export** the transcript as JSON or the speech as one merged WAV.
 
 On a phone the conversation fills the screen, the settings fold away into two
@@ -141,7 +164,7 @@ words spoken, in order. `sample.wav` is an English clip for VAD-only testing.
 | control | effect |
 |---|---|
 | speech / silence threshold | how loud-and-voiced a frame must be to count as speech |
-| end-of-turn silence | pause length that closes a turn, raise it if you are cut off mid-sentence |
+| natural pause baseline | minimum conversational pause; extended for short fragments, unfinished phrases, and recent speaking pace |
 | min speech | drops blips shorter than this |
 | pre-speech pad | audio kept before the trigger, so turns do not start clipped |
 

@@ -18,7 +18,7 @@ class LiveTranscript {
       this.pending = false;
       const result = JSON.parse(data);
       if (this.active && this.sentEpoch === this.epoch) {
-        this.render(result.type === 'partial' ? result.text : result.error);
+        this.render(result.type === 'partial' ? result.text : result.error, result.type);
       }
     };
     ws.onclose = () => {

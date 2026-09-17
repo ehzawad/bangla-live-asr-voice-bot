@@ -200,16 +200,16 @@
       <h2>2 · Continue with microphone</h2>
       <button class="mic" id="micBtn" disabled>🎙 Start listening</button>
       <div class="meter"><div id="meter"></div></div>
-      <div class="hint">Live text updates while you speak. Each pause finalizes a turn, then the bot replies.</div>
+      <div class="hint">Keeps listening while replying. Pause naturally for an answer; speak again to interrupt.</div>
     </div>
 
     <details class="card stack" id="modeCard" open>
       <summary><h2>Conversation mode</h2></summary>
       <label class="check"><input type="checkbox" id="doAsr" checked /> Transcribe turns (Bangla ASR)</label>
       <label class="check"><input type="checkbox" id="doReply" checked /> Generate a reply after each turn</label>
-      <label class="check"><input type="checkbox" id="doSpeak" /> Speak the reply out loud</label>
+      <label class="check"><input type="checkbox" id="doSpeak" checked /> Speak the reply out loud</label>
       <select id="llmModel"><option value="">default model</option></select>
-      <div class="hint">While a reply is spoken the microphone pauses, so the assistant does not hear itself.</div>
+      <div class="hint">The microphone stays on during replies. Echo cancellation is requested; headphones give the most reliable interruption behavior.</div>
     </details>
 
     <details class="card stack" id="vadCard" open>
@@ -218,13 +218,13 @@
       <input type="range" id="posThr" min="0.1" max="0.95" step="0.05" value="0.5" />
       <label class="row">Silence threshold <output id="negOut">0.35</output></label>
       <input type="range" id="negThr" min="0.05" max="0.9" step="0.05" value="0.35" />
-      <label class="row">End-of-turn silence (ms) <output id="redOut">700</output></label>
-      <input type="range" id="redemption" min="100" max="2000" step="50" value="700" />
+      <label class="row">Natural pause baseline (ms) <output id="redOut">800</output></label>
+      <input type="range" id="redemption" min="500" max="1800" step="50" value="800" />
       <label class="row">Min speech (ms) <output id="minOut">250</output></label>
       <input type="range" id="minSpeech" min="50" max="1500" step="50" value="250" />
       <label class="row">Pre-speech pad (ms) <output id="padOut">300</output></label>
       <input type="range" id="prePad" min="0" max="1000" step="50" value="300" />
-      <div class="hint">Applies to the next file and the next mic start.</div>
+      <div class="hint">The bot extends the pause for short fragments and unfinished phrases. Speech thresholds apply on the next mic start.</div>
     </details>
   </div>
 
@@ -258,6 +258,7 @@
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.wasm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/bundle.min.js"></script>
 <script src="/static/live.js"></script>
+<script src="/static/turn-taking.js"></script>
 <script>
 (() => {
   const ORT_BASE = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/";
@@ -267,14 +268,19 @@
 
   const state = {
     sessionId: null, turns: [], micVad: null, micOn: false,
-    micStartedAt: 0, speechStartedAt: 0, busy: false, replying: false, asrTimes: [],
+    micStartedAt: 0, speechStartedAt: 0, busy: false, replying: false, asrTimes: [], activeReply: null, pendingAuto: null,
   };
 
   const preview = new LiveTranscript(
-    text => { $("partialText").textContent = text; },
+    (text, kind) => {
+      $("partialText").textContent = text;
+      if (kind === "partial") endpoint.hint(text);
+    },
     audio => vad.utils.encodeWAV(audio, 1, SR, 1, 16),
   );
   let turnQueue = Promise.resolve();
+  let interruptQueue = Promise.resolve();
+  let sessionPromise = null;
 
   const fmt = (ms) => (ms / 1000).toFixed(1) + "s";
   const clock = (ms) => {
@@ -283,6 +289,30 @@
   };
   const setStatus = (t, c) => { $("statusText").textContent = t; $("dot").className = "dot " + (c || ""); };
   const showErr = (e) => { $("err").textContent = e ? (e.message || String(e)) : ""; if (e) console.error(e); };
+
+  const endpoint = new TurnTaking({
+    basePause: () => +$("redemption").value,
+    onWait: () => { if (state.micOn) setStatus("listening… waiting for your thought", "listening"); },
+    onTurn: finalizeMicTurn,
+  });
+
+  function finalizeMicTurn({audio, startMs, endMs, epoch}) {
+    const turn = addTurn({source: "mic", origin: "", startMs, endMs, audio});
+    if (state.micOn) setStatus("transcribing… still listening", "thinking");
+    turnQueue = turnQueue.then(async () => {
+      await uploadTurn(turn);
+      if (turn.text && epoch === endpoint.epoch) state.pendingAuto = epoch;
+      maybeReply();
+    }).catch(showErr);
+  }
+
+  function maybeReply() {
+    if (state.micOn && !endpoint.speaking && !endpoint.segments.length &&
+        state.pendingAuto === endpoint.epoch && $("doReply").checked) {
+      state.pendingAuto = null;
+      void generateReply();
+    }
+  }
 
   function vadOptions() {
     return {
@@ -319,15 +349,13 @@
   }
   async function ensureSession() {
     if (state.sessionId) return state.sessionId;
-    try {
-      const { session_id } = await api("/api/sessions", { method: "POST" });
+    if (!sessionPromise) sessionPromise = (async () => {
+      const {session_id} = await api("/api/sessions", {method: "POST"});
       state.sessionId = session_id;
       $("sessionLabel").textContent = `session ${session_id}`;
-    } catch {
-      state.sessionId = "local";
-      $("sessionLabel").textContent = "server offline · no transcription";
-    }
-    return state.sessionId;
+      return session_id;
+    })().finally(() => { sessionPromise = null; });
+    return sessionPromise;
   }
 
   // ---------------- rendering ----------------
@@ -377,6 +405,7 @@
         <div class="text bn"></div>
       </div>`;
     el.querySelector(".text").textContent = text;
+    turn.el = el;
     $("turns").appendChild(el);
     el.scrollIntoView({ behavior: "smooth", block: "nearest" });
     updateStats();
@@ -425,44 +454,122 @@
     }
   }
 
-  // ---------------- reply generation ----------------
-  async function generateReply() {
-    if (state.replying) return;
-    const sid = await ensureSession();
-    if (sid === "local") return;
-    state.replying = true;
-    const prev = $("statusText").textContent;
-    setStatus("generating reply…", "thinking");
-    try {
-      const turn = await api(`/api/sessions/${sid}/reply`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: $("llmModel").value || null }),
-      });
-      addBotTurn(turn.text, `${turn.model} · ${turn.gen_ms}ms`);
-      if ($("doSpeak").checked) await speak(turn.text);
-    } catch (e) { showErr(e); }
-    finally { state.replying = false; setStatus(state.micOn ? "listening…" : "ready", state.micOn ? "listening" : "ready"); }
+  // ---------------- interruptible reply + speech ----------------
+  function interruptReply() {
+    const active = state.activeReply;
+    if (!active) return;
+    state.activeReply = null;
+    state.replying = false;
+    active.controller.abort();
+    window.speechSynthesis?.cancel();
+    active.finishSpeech?.();
+    if (active.turn) {
+      active.turn.interrupted = true;
+      const mark = document.createElement("span");
+      mark.textContent = "interrupted";
+      active.turn.el.querySelector(".head").appendChild(mark);
+    }
+    if (active.sid) {
+      const request = api(`/api/sessions/${active.sid}/interrupt`, {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({request_id: active.id}),
+      }).catch(showErr);
+      interruptQueue = Promise.all([interruptQueue, request]).then(() => {});
+    }
   }
 
-  async function speak(text) {
-    if (!window.speechSynthesis) return;
-    const wasListening = state.micOn;
-    if (wasListening && state.micVad) await state.micVad.pause();
-    return new Promise((resolve) => {   // don't transcribe ourselves
+  async function generateReply() {
+    if (state.activeReply || endpoint.speaking || endpoint.segments.length) return;
+    const active = {id: crypto.randomUUID(), controller: new AbortController()};
+    state.activeReply = active;
+    state.replying = true;
+    setStatus("thinking… still listening", "thinking");
+    try {
+      await interruptQueue;
+      if (state.activeReply !== active) return;
+      active.sid = await ensureSession();
+      if (state.activeReply !== active) return;
+      const turn = await api(`/api/sessions/${active.sid}/reply`, {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        signal: active.controller.signal,
+        body: JSON.stringify({model: $("llmModel").value || null, request_id: active.id}),
+      });
+      // A tentative VAD onset blocks playback; confirmed speech cancels it.
+      while (endpoint.speaking && state.activeReply === active) {
+        await new Promise(resolve => setTimeout(resolve, 40));
+      }
+      if (state.activeReply !== active) return;
+      active.turn = addBotTurn(turn.text, `${turn.model} · ${turn.gen_ms}ms`);
+      if ($("doSpeak").checked) await speak(turn.text, active);
+    } catch (e) {
+      if (state.activeReply === active && e.name !== "AbortError") showErr(e);
+    } finally {
+      if (state.activeReply === active) {
+        state.activeReply = null;
+        state.replying = false;
+        setStatus(state.micOn ? "listening…" : "ready", state.micOn ? "listening" : "ready");
+      }
+    }
+  }
+
+  async function speak(text, active) {
+    if (state.activeReply !== active) return;
+    const voice = window.speechSynthesis?.getVoices().find(v => /^bn(?:-|$)/i.test(v.lang));
+    if (!voice) return speakLocal(text, active);
+    return new Promise(resolve => {
       const u = new SpeechSynthesisUtterance(text);
       u.lang = "bn-BD";
-      const v = (speechSynthesis.getVoices() || []).find(v => /^bn|beng/i.test(v.lang));
-      if (v) u.voice = v;
+      u.voice = voice;
       let settled = false;
+      let watchdog;
       const done = () => {
-        if (settled) return; settled = true;
-        // only resume if the user has not stopped the mic in the meantime
-        if (wasListening && state.micOn && state.micVad) state.micVad.start().catch(showErr);
+        if (settled) return;
+        settled = true;
+        clearTimeout(watchdog);
+        active.finishSpeech = null;
         resolve();
       };
-      u.onend = done; u.onerror = done;
-      setTimeout(done, Math.max(8000, text.length * 120));      // guard against a stuck utterance
+      active.finishSpeech = done;
+      u.onend = done;
+      u.onerror = done;
+      watchdog = setTimeout(() => { speechSynthesis.cancel(); done(); }, Math.max(15000, text.length * 200));
+      setStatus("speaking… you can interrupt", "speaking");
       speechSynthesis.speak(u);
+    });
+  }
+
+  let speechContext = null;
+  function primeAudio() {
+    if (!speechContext) speechContext = new AudioContext();
+    return speechContext.resume();
+  }
+  async function speakLocal(text, active) {
+    await primeAudio();
+    const response = await fetch("/api/speech", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({text}), signal: active.controller.signal,
+    });
+    if (!response.ok) throw new Error("Speech playback: " + await response.text());
+    const buffer = await speechContext.decodeAudioData(await response.arrayBuffer());
+    if (state.activeReply !== active) return;
+    return new Promise(resolve => {
+      const source = speechContext.createBufferSource();
+      source.buffer = buffer;
+      source.connect(speechContext.destination);
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        source.onended = null;
+        try { source.stop(); } catch {}
+        source.disconnect();
+        active.finishSpeech = null;
+        resolve();
+      };
+      active.finishSpeech = done;
+      source.onended = done;
+      setStatus("speaking… you can interrupt", "speaking");
+      source.start();
     });
   }
 
@@ -546,12 +653,20 @@
   async function startMic() {
     showErr(null);
     primeSpeech();
+    void primeAudio().catch(showErr);
+    endpoint.reset();
+    state.pendingAuto = null;
     preview.connect();
     $("micBtn").disabled = true; $("micBtn").textContent = "starting…";
     try {
       if (state.micVad) { try { await state.micVad.destroy(); } catch {} state.micVad = null; }
       state.micVad = await vad.MicVAD.new({
         ...vadOptions(),
+        redemptionMs: 300,
+        minSpeechMs: Math.max(250, +$("minSpeech").value),
+        getStream: () => navigator.mediaDevices.getUserMedia({audio: {
+          channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+        }}),
         model: "v5",
         baseAssetPath: VAD_BASE,
         onnxWASMBasePath: ORT_BASE,
@@ -562,29 +677,36 @@
           if ($("doAsr").checked) preview.frame(frame);
         },
         onSpeechStart: () => {
+          endpoint.start();
           preview.begin();
           state.speechStartedAt = performance.now() - state.micStartedAt;
           setStatus("speech detected", "speaking");
           $("live").classList.add("show");
+          clearInterval(liveTimer);
           liveTimer = setInterval(() => { $("liveDur").textContent = fmt(performance.now() - state.micStartedAt - state.speechStartedAt); }, 100);
         },
-        onVADMisfire: () => { preview.end(); stopLive(); setStatus("listening… (too short)", "listening"); },
+        onSpeechRealStart: () => {
+          state.pendingAuto = null;
+          interruptReply();
+        },
+        onVADMisfire: () => {
+          endpoint.misfire();
+          preview.end(); stopLive();
+          if (state.pendingAuto !== null) state.pendingAuto = endpoint.epoch;
+          maybeReply();
+          if (!state.activeReply) setStatus("listening…", "listening");
+        },
         onSpeechEnd: (audio) => {
-          preview.end();
           stopLive();
           const endMs = performance.now() - state.micStartedAt;
           const startMs = Math.max(0, endMs - audio.length / SR * 1000);
-          const turn = addTurn({ source: "mic", origin: "", startMs, endMs, audio });
-          setStatus("transcribing…", "thinking");
-          turnQueue = turnQueue.then(async () => {
-            await uploadTurn(turn);
-            if ($("doReply").checked && turn.text) await generateReply();
-            else if (state.micOn) setStatus("listening…", "listening");
-          }).catch(showErr);
+          endpoint.end({audio, startMs, endMs});
+          preview.end();
         },
       });
+      state.micStartedAt = performance.now();
       await state.micVad.start();
-      state.micOn = true; state.micStartedAt = performance.now();
+      state.micOn = true;
       holdScreenAwake();
       $("micBtn").textContent = "⏹ Stop listening"; $("micBtn").classList.add("on");
       setStatus("listening…", "listening");
@@ -598,9 +720,13 @@
   async function stopMic() {
     preview.close();
     state.micOn = false;
+    state.pendingAuto = null;
+    interruptReply();
     releaseScreen();
     $("micBtn").disabled = true;
     if (state.micVad) { try { await state.micVad.pause(); await state.micVad.destroy(); } catch (e) { showErr(e); } state.micVad = null; }
+    endpoint.flush();
+    endpoint.reset();
     $("micBtn").disabled = false;
     stopLive(); $("meter").style.width = "0%";
     $("micBtn").textContent = "🎙 Start listening"; $("micBtn").classList.remove("on");
@@ -609,14 +735,14 @@
   $("micBtn").addEventListener("click", () => state.micOn ? stopMic() : startMic());
 
   // ---------------- toolbar ----------------
-  $("replyBtn").addEventListener("click", generateReply);
+  $("replyBtn").addEventListener("click", () => { void primeAudio().catch(showErr); void generateReply(); });
   const download = (blob, name) => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); };
   $("exportJsonBtn").addEventListener("click", () => {
     const rows = state.turns.map((t) => ({
       index: t.index, role: t.role, source: t.source, origin: t.origin || null,
       start_ms: t.startMs != null ? +t.startMs.toFixed(1) : null,
       end_ms: t.endMs != null ? +t.endMs.toFixed(1) : null,
-      text: t.text || null, file: t.file || null,
+      text: t.text || null, file: t.file || null, interrupted: !!t.interrupted,
     }));
     download(new Blob([JSON.stringify({ session_id: state.sessionId, sample_rate: SR, turns: rows }, null, 2)], { type: "application/json;charset=utf-8" }), `conversation-${state.sessionId || "local"}.json`);
   });
@@ -630,6 +756,8 @@
   });
   $("clearBtn").addEventListener("click", async () => {
     if (state.micOn) await stopMic();
+    interruptReply();
+    await interruptQueue;
     await turnQueue;
     for (const t of state.turns) if (t.url) URL.revokeObjectURL(t.url);
     state.turns = []; state.asrTimes = [];
