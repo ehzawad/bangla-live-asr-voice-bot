@@ -25,6 +25,12 @@ Object.defineProperty(window, 'speechSynthesis', {value: {
   cancel: () => {window.cancelCount++;}
 }});
 window.SpeechSynthesisUtterance = class {constructor(text) {this.text = text;}};
+window.AudioContext = class {
+  destination = {};
+  async resume() {}
+  async decodeAudioData() {return {};}
+  createBufferSource() {return {connect(){}, disconnect(){}, start(){window.speakCount++;}, stop(){window.cancelCount++;}};}
+};
 '''
 
 async def main():
@@ -46,8 +52,11 @@ async def main():
                 data = {'session_id': 'browser-test'}
             elif path.endswith('/turns'):
                 data = {'text': 'আমার কথা শুনতে পাচ্ছেন', 'file': 'test.wav', 'asr_ms': 1}
-            elif path.endswith('/reply'):
-                data = {'text': 'হ্যাঁ, আমি শুনতে পাচ্ছি।', 'model': 'gemma4:e2b', 'gen_ms': 1}
+            elif path.endswith('/reply/stream'):
+                turn = {'text': 'হ্যাঁ, আমি শুনতে পাচ্ছি।', 'model': 'gemma4:e2b', 'gen_ms': 1}
+                events = [{'type': 'delta', 'text': turn['text']}, {'type': 'done', 'turn': turn}]
+                await route.fulfill(body='\n'.join(json.dumps(e) for e in events)+'\n', content_type='application/x-ndjson')
+                return
             else:
                 data = {'ok': True}
             await route.fulfill(json=data)
@@ -57,20 +66,22 @@ async def main():
         await page.locator('#micBtn').click()
         await page.wait_for_timeout(100)
         assert await page.evaluate('!!window.testVAD'), {'errors': errors, 'ui': await page.locator('#err').inner_text(), 'status': await page.locator('#statusText').inner_text()}
+        assert await page.evaluate('testVAD.minSpeechMs') == 120
+        assert await page.evaluate('testVAD.positiveSpeechThreshold') == .35
         await page.evaluate('''() => {
           testVAD.onSpeechStart(); testVAD.onSpeechRealStart();
           testVAD.onSpeechEnd(new Float32Array(32000));
         }''')
         await page.wait_for_timeout(200)
-        assert not any(path.endswith('/reply') for path in requests), 'replied before natural pause'
-        await page.evaluate('testVAD.onSpeechStart(); testVAD.onSpeechRealStart();')
+        assert not any(path.endswith('/reply/stream') for path in requests), 'replied before natural pause'
+        await page.evaluate('testVAD.onSpeechStart(); testVAD.onSpeechRealStart(); testVAD.onFrameProcessed({isSpeech: .9}, new Float32Array(4096));')
         await page.wait_for_timeout(650)
-        assert not any(path.endswith('/reply') for path in requests), 'replied while user continued'
+        assert not any(path.endswith('/reply/stream') for path in requests), 'replied while user continued'
         await page.evaluate('testVAD.onSpeechEnd(new Float32Array(32000));')
         await page.wait_for_function('window.speakCount === 1')
         assert await page.evaluate('window.pauseCount') == 0, 'microphone paused during bot speech'
         assert requests.count('sessions/browser-test/turns') == 1, 'thinking pause split the user turn'
-        await page.evaluate('testVAD.onSpeechStart(); testVAD.onSpeechRealStart();')
+        await page.evaluate('testVAD.onSpeechStart(); testVAD.onSpeechRealStart(); testVAD.onFrameProcessed({isSpeech: .9}, new Float32Array(4096));')
         await page.wait_for_function('window.cancelCount > 0')
         await page.wait_for_timeout(100)
         assert 'sessions/browser-test/interrupt' in requests, 'server was not told about interruption'

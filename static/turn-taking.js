@@ -19,14 +19,19 @@ class TurnTaking {
     this.cancel(this.timer);
     this.timer = null;
     this.speaking = true;
-    this.epoch++;
+    this.confirmed = false;
     this.text = '';
+  }
+  confirm() {
+    if (!this.confirmed) this.epoch++;
+    this.confirmed = true;
   }
   hint(text) {
     this.text = text;
     if (!this.speaking && this.segments.length) this.arm();
   }
   end(segment, silenceMs = 300) {
+    this.confirm();
     this.speaking = false;
     this.segments.push(segment);
     this.lastVoice = this.now() - silenceMs;

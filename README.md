@@ -1,206 +1,130 @@
-# Bengali voice bot — `bot-end-to-end`
+# Bangla real-time voice bot
 
-Microphone → browser Silero VAD → live Bengali ASR previews → final transcript
-at each pause → local Ollama reply → optional browser speech playback.
+An interruptible voice conversation app with typed chat and image attachments.
+The microphone remains active while the bot answers. Speak naturally, pause for
+an answer, or speak again to interrupt it.
 
-This branch includes the complete conversation bot. Switch to `asr-text-only`
-for transcription without Ollama, generated replies, or speech playback.
-Stop the server before switching branches, then restart it with `./run.sh`.
+## Models and documented capabilities
 
-## Duplex conversation and natural pauses
+- **Gemma 4 E2B (`gemma4:e2b`)** handles speech recognition, conversation, and
+  image understanding through local Ollama. The model accepts audio, images,
+  and text but **generates text only**; it does not synthesize a voice.
+- **Silero VAD** detects speech in the browser. An adaptive timing algorithm
+  decides when a conversational turn is finished.
+- **Meta MMS Bengali (`facebook/mms-tts-ben`)** converts reply text into speech
+  in a dedicated CPU worker. This neural voice replaces the old robotic eSpeak
+  fallback. It is a separate model, not “Gemma's voice.”
 
-After **Start listening**, the microphone stays active during transcription,
-generation, and spoken replies. Confirmed speech (at least 250 ms by default)
-interrupts playback and cancels the pending Ollama request. Interrupted replies
-are marked and excluded from later prompt history. **Stop listening** stops
-playback and saves any pending user speech without generating another reply.
+Primary references: [Google Gemma 4 model card](https://ai.google.dev/gemma/docs/core/model_card_4),
+[Google audio guide](https://ai.google.dev/gemma/docs/capabilities/audio),
+[Ollama vision API](https://docs.ollama.com/capabilities/vision), and
+[MMS Bengali model card](https://huggingface.co/facebook/mms-tts-ben).
+The MMS voice weights use **CC-BY-NC-4.0**, including a noncommercial restriction.
+Gemma 4 weights use Apache-2.0. Check the model licenses for your intended use.
 
-Silero VAD identifies speech frames. A separate timing algorithm joins speech
-segments across thinking pauses. It normally waits about 800 ms of silence,
-about 1200 ms after short fragments, and about 1800 ms after connectives such
-as “কিন্তু” or “কারণ”. It also adjusts to recent within-turn pauses, with a
-2400 ms ceiling. The baseline is adjustable in VAD settings. These are
-heuristics using the latest available ASR preview, not a semantic end-of-turn
-model; they cannot always distinguish a thinking pause from a finished thought.
+## Flow
 
-Live text uses rolling snapshots over `/api/transcribe/live`, about once a
-second with one request in flight. FastConformer-CTC decodes each snapshot;
-this is not native streaming ASR. Previews may change and show at most the
-latest 20 seconds. Final merged speech is transcribed and saved before the bot
-replies. Replies currently arrive as complete text, not streamed tokens.
+Microphone → VAD → adaptive pause → Gemma audio transcription → streamed Gemma
+reply → neural speech, sentence by sentence. Confirmed user speech cancels
+pending generation and playback without stopping the microphone.
 
-Bengali speech uses an installed browser voice when available, otherwise a
-local eSpeak NG fallback. The fallback is synthetic, not a neural voice.
-Install it on Ubuntu/Debian with `sudo apt install espeak-ng`, or run
-`./setup_tts.sh` for a user-local installation without sudo. `CTC_ESPEAK` can
-point to another eSpeak NG executable. Audio capture requests echo cancellation
-and noise suppression. Speaker feedback can still trigger VAD; headphones are
-recommended for reliable interruption. Background tabs and mobile operating
-systems can suspend microphone access; listening lasts while the page remains
-active and permission is granted.
+The default minimum speech duration is 120 ms, with 450 ms pre-roll to retain
+word beginnings. Playback interruptions use 250 ms of confirmed speech to
+reduce echo/noise triggers; shorter accepted utterances can still interrupt
+once transcribed. Natural silence normally waits about 800 ms, about 1200 ms
+for short fragments, and up to 1800 ms for trailing connectives such as “কিন্তু”.
+The timing adapts to recent pauses and is capped at 2400 ms. These are heuristics,
+not a separate semantic end-of-turn model.
 
-Frontend libraries and fonts load from CDNs; ASR needs an initial model
-download. No training dataset or additional pause-detection model is required.
-
-## Developer checks
-
-```bash
-.venv/bin/python -m unittest discover -s tests -v
-node tests/live.test.cjs
-node tests/turn-taking.test.cjs
-```
-
-The automated checks use mocked ASR for repeatable protocol and storage tests.
-For real model inference, start the app and run `test_pipeline.py` below.
-The optional `tests/browser_duplex.py` test uses Playwright and installed Chrome
-with synthetic VAD events to verify browser interruption and playback control.
-Recordings, certificates, and `.venv` are excluded from Git.
-
----
-
-# Bangla Voice Conversation (VAD → ASR → reply)
-
-Upload an audio file or talk into the microphone. Silero VAD cuts speech into
-turns in the browser, each turn is transcribed by a Bengali FastConformer-CTC
-model, and a local LLM writes a reply. Everything runs on this machine.
-
-| stage | what runs | where |
-|---|---|---|
-| voice activity detection | Silero VAD via `@ricky0123/vad-web` (ONNX runtime, WASM) | browser |
-| speech to text | [`ehzawad/stt_bn_fastconformer_ctc`](https://huggingface.co/ehzawad/stt_bn_fastconformer_ctc) (NeMo, 115 M params) | server, GPU if free |
-| text generation | Ollama chat model, default `gemma4:e2b` | localhost:11434 |
-| speech out | Bengali browser voice, or local eSpeak NG fallback | browser / server |
-
-## Setup
-
-The environment is built with [uv](https://docs.astral.sh/uv/) on Python 3.14,
-the newest release NeMo runs on here:
-
-```bash
-uv venv --python 3.14 .venv
-uv pip install --index-strategy unsafe-best-match \
-  --extra-index-url https://download.pytorch.org/whl/cu128 \
-  "torch==2.9.0+cu128" "nemo_toolkit[asr]==2.7.3" fastapi uvicorn "websockets>=14,<17" python-multipart soundfile httpx
-```
-
-Text generation needs Ollama with a chat model:
-
-```bash
-ollama serve &          # if not already running
-ollama pull gemma4:e2b   # or set CTC_LLM_MODEL to any model you have
-```
+Gemma audio input is limited to 30 seconds. Longer VAD segments are divided into
+windows of at most 29 seconds, preferring quiet boundaries. In the tested local
+Ollama version (0.20.2), the native REST API accepts base64 WAV bytes in the
+message's `images` field; [its source routes WAV input to the audio encoder](https://github.com/ollama/ollama/blob/v0.20.2/model/models/gemma4/model.go#L114-L118).
+This is not an undocumented `audio` or `audios` field.
 
 ## Run
+
+The existing local environment can be used directly:
 
 ```bash
 ./run.sh
 ```
 
-It starts Ollama if needed, creates the certificate on first run, and prints
-the addresses plus a QR code you can scan with a phone:
-
-```
-  open on this machine : https://localhost:8443
-  share on the network : https://172.16.213.77:8443
-```
-
-Anyone on the same network opens that address. The ASR checkpoint (463 MB)
-downloads on first start and the header pill turns green when it is ready.
-
-### Why HTTPS
-
-Browsers only allow microphone access in a "secure context": HTTPS, or plain
-HTTP on localhost. Over `http://<your-ip>:8000` other devices could upload
-files but never record, so the server serves HTTPS on port 8443 with a
-certificate that `gen_cert.sh` issues for this machine's addresses.
-
-The certificate is self-signed, so each device shows a warning the first time:
-
-| browser | what to tap |
-|---|---|
-| Chrome, Edge, Android | Advanced, then Proceed to … |
-| Safari, iPhone, iPad | Show Details, then visit this website |
-| Firefox | Advanced, then Accept the Risk and Continue |
-
-Run `./gen_cert.sh --force` if this machine's IP address changes. For warning-free
-access install [mkcert](https://github.com/FiloSottile/mkcert) on each device instead.
-
-Settings: `CTC_PORT` changes the port, `CTC_HOST` the bind address,
-`CTC_TLS=0` serves plain HTTP (localhost microphone only).
-
-## Use
-
-1. **Upload** an audio file. Each detected speech segment becomes a turn with a
-   waveform, a player and its Bengali transcript. Clicking a highlighted region
-   on the timeline plays that turn.
-2. **Start listening** to continue by voice. Speak, pause, and the turn is
-   transcribed and answered. *Speak the reply* is enabled by default. The
-   microphone stays active so you can interrupt and continue speaking.
-3. **Export** the transcript as JSON or the speech as one merged WAV.
-
-On a phone the conversation fills the screen, the settings fold away into two
-panels, and the listen button docks to the bottom above the home indicator. The
-screen is kept awake while the microphone is running.
-
-Each browser gets its own session, and several people can use it at once.
-Transcription runs one clip at a time on the GPU, so simultaneous turns queue
-rather than compete for memory.
-
-Turns are written to `conversations/<session>/` as 16 kHz WAV files plus
-`turns.json` with timings and text.
-
-## Check it without a browser
+Open **https://localhost:8443**. For a fresh installation:
 
 ```bash
+uv venv --python 3.14 .venv
+uv pip install --python .venv/bin/python -r requirements-web.txt torch
+ollama pull gemma4:e2b
+./setup_tts.sh
+./run.sh
+```
+
+Ollama runs on `localhost:11434`. The neural voice downloads once, then stays
+loaded on CPU. The bot branch does not load the legacy NeMo ASR model. Browser
+VAD assets and fonts are fetched from CDNs, so the initial page load needs internet.
+
+`run.sh` creates a self-signed certificate if none exists. To avoid browser
+warnings, use a local CA such as mkcert and install its root in each client
+browser's trust store. The server reads `certs/cert.pem` and `certs/key.pem`.
+Private certificates and keys are excluded from Git.
+
+## Development controls
+
+- **Show conversation text** toggles transcript and reply visibility. Hidden
+  text is still processed, saved, and included in exports; voice continues.
+- **Live partial text** is optional and off by default to avoid extra inference
+  competing with the bot. When enabled before starting the microphone, rolling
+  snapshots provide revisable text previews. This is not native streaming ASR.
+- **Speak the reply** toggles speech output independently.
+- Speech thresholds, minimum speech duration, pre-roll, and natural pause baseline
+  are adjustable. Start/Stop controls the microphone explicitly.
+
+Type in the composer or attach a JPEG, PNG, or WebP image (up to 8 MB /16 million
+pixels). Image-only messages are supported. Images are normalized to JPEG, up to
+1536 pixels per side, with white transparency backgrounds. The last four images
+remain in model context for follow-up voice questions. Resizing can lose fine
+OCR detail; do not treat generated descriptions as verified facts.
+
+Conversations are stored under `conversations/<session>/`: WAV recordings,
+normalized pictures, and `turns.json`. Export JSON or merged user audio from
+the toolbar. Interrupted replies are marked and excluded from future prompts.
+
+## Branches
+
+- `main` and `bot-end-to-end`: the complete Gemma voice/image bot.
+- `asr-text-only`: the separate NeMo Bengali transcription application.
+
+Stop the server before switching branches. Recordings, `.venv`, and certificates
+are shared ignored local data. No training dataset is required or included;
+sample audio files are test fixtures.
+
+## Checks and accuracy
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+node tests/live.test.cjs
+node tests/turn-taking.test.cjs
+node tests/reply-stream.test.cjs
+# Optional browser regression checks; install playwright first, uses local Chrome:
+.venv/bin/python tests/browser_duplex.py
+.venv/bin/python tests/browser_images.py
+# Real audio pipeline, with the server running:
 .venv/bin/python test_pipeline.py sample_bn.wav
 ```
 
-`sample_bn.wav` is 9.4 s of Bengali built from four Wikimedia Commons
-pronunciation recordings separated by silence; `sample_bn_words.json` lists the
-words spoken, in order. `sample.wav` is an English clip for VAD-only testing.
+Protocol tests mock inference. Browser regression tests inject VAD events to
+verify control flow. A local synthesized “হ্যালো” smoke test was correctly
+transcribed by Gemma; this does **not** establish real-microphone accuracy,
+WER, VAD precision/recall, or voice naturalness. Those need representative labeled
+recordings and listening evaluation. Headphones help prevent speaker feedback
+from triggering VAD. Background tabs or mobile OS restrictions can suspend audio.
 
-## Settings
+## Configuration
 
-| control | effect |
-|---|---|
-| speech / silence threshold | how loud-and-voiced a frame must be to count as speech |
-| natural pause baseline | minimum conversational pause; extended for short fragments, unfinished phrases, and recent speaking pace |
-| min speech | drops blips shorter than this |
-| pre-speech pad | audio kept before the trigger, so turns do not start clipped |
+`CTC_HOST` (default `0.0.0.0`), `CTC_PORT` (8443), `CTC_TLS=0` for HTTP,
+`OLLAMA_HOST`, `CTC_LLM_MODEL` (gemma4:e2b), `CTC_TTS_MODEL`
+(facebook/mms-tts-ben), `CTC_TTS_THREADS` (4), and `CTC_URL` for CLI tests.
 
-Environment variables: `CTC_LLM_MODEL` picks the Ollama model, `OLLAMA_HOST`
-points at a different Ollama server.
-
-## Measured on this machine
-
-RTX 2050 (4 GB), Bengali test clip, greedy CTC decoding:
-
-| step | time |
-|---|---|
-| ASR per speech turn (0.5–2 s of audio) | 29–79 ms |
-| ASR for the whole 9.4 s file in one call | 240 ms |
-| reply from `gemma3:4b` | 1.1–4.5 s |
-| ASR model load at startup | ~30 s |
-
-## Notes
-
-**cuDNN.** The cuDNN build that ships with this torch wheel cannot run
-convolutions on this GPU: the first one raises "unable to find an engine to
-execute this computation". `asr.py` probes for that at startup and turns cuDNN
-off, which falls back to a native CUDA kernel that works. If you move to
-another machine the probe just passes and cuDNN stays on.
-
-**Anyone on the network can use it, and there is no login.** The API also
-lets any of them list sessions and download another session's audio, so treat
-it as an open tool on a network you trust, not something to expose to the
-internet.
-
-**Quiet recordings.** Speech more than about 25 dB below the rest of a file may
-fall under the VAD threshold and produce no turn. Lower the speech threshold,
-or normalise the file first.
-
-The ASR model expects 16 kHz mono, which is exactly what the VAD emits, and
-returns normalised Bengali without punctuation. It reports 17.12 % WER on the
-FLEURS Bengali test split with greedy decoding and no language model, so
-expect transcription errors on noisy or accented input. The reply prompt tells
-the model to read through minor ASR mistakes.
+There is no authentication. Anyone with network access can read or delete
+sessions, including recordings and images. Use it on a trusted local network.

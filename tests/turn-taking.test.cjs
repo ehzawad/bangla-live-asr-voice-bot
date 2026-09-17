@@ -56,3 +56,11 @@ function fixture() {
   c.start(); c.misfire(); advance(5000); assert.equal(turns.length, 0, 'noise never makes an empty turn');
 }
 console.log('Natural pause, continuation, interruption, overlap, and stop-flush tests passed');
+{
+  const {controller:c} = fixture();
+  c.start(); c.confirm(); const epoch=c.epoch;
+  c.misfire(); c.start(); c.misfire();
+  assert.equal(c.epoch,epoch,'a noise misfire must not discard an in-flight transcript');
+  c.start(); c.confirm();
+  assert.equal(c.epoch,epoch+1,'confirmed new speech invalidates old replies');
+}

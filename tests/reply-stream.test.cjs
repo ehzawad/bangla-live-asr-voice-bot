@@ -1,0 +1,22 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const context = {window: {}, TextDecoder};
+vm.runInNewContext(fs.readFileSync('static/reply-stream.js', 'utf8'), context);
+(async () => {
+  const text = '{"type":"delta","text":"হ্যালো"}\n{"type":"done","turn":{"text":"হ্যালো"}}\n';
+  const bytes = new TextEncoder().encode(text);
+  const response = new Response(new ReadableStream({start(c) {for(const b of bytes)c.enqueue(Uint8Array.of(b));c.close();}}));
+  const events=[];
+  await context.window.consumeReplyStream(response,e=>events.push(e));
+  assert.equal(events[0].text,'হ্যালো');
+  await assert.rejects(context.window.consumeReplyStream(new Response('{"type":"delta","text":"unfinished"}\n'),()=>{}),/before completion/);
+  await assert.rejects(context.window.consumeReplyStream(new Response('{"type":"error","error":"interrupted"}\n'),()=>{}),/interrupted/);
+  const chunks=new context.window.SpeechChunks();
+  assert.equal(chunks.push('হ্যালো').length,0);
+  assert.equal(chunks.push('। কেমন আছেন')[0],'হ্যালো।');
+  assert.equal(chunks.push('?',false)[0],'কেমন আছেন?');
+  assert.equal(chunks.push('সংখ্যা 1.7',false).length,0);
+  assert.equal(chunks.push('',true)[0],'সংখ্যা 1.7');
+  console.log('Streaming UTF-8, incomplete/error responses, and speech sentence buffering passed');
+})().catch(e=>{console.error(e);process.exit(1);});

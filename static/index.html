@@ -70,6 +70,14 @@
   .turn .badge { width: 42px; height: 42px; border-radius: 10px; display: grid; place-items: center; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-align: center; }
   .turn.file .badge { background: rgba(245,185,66,.18); color: var(--file); }
   .turn.mic .badge { background: rgba(255,92,92,.18); color: var(--mic); }
+  body.hide-conversation-text .turn .text, body.hide-conversation-text #partialText, body.hide-conversation-text #previewHint { display: none; }
+  .turn.chat .badge { background: rgba(79,140,255,.18); color: var(--accent); }
+  .chat-image { display: block; max-width: min(100%, 420px); max-height: 320px; border-radius: 8px; margin-top: 10px; object-fit: contain; }
+  .composer { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 14px; }
+  .composer textarea { width: 100%; resize: vertical; min-height: 80px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font: inherit; font-size: 16px; }
+  .composer-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .composer-actions .hint { flex: 1; }
+  #imagePreview img { max-height: 140px; }
   .turn.bot { background: rgba(167,139,250,.08); border-color: rgba(167,139,250,.3); }
   .turn.bot .badge { background: rgba(167,139,250,.2); color: var(--bot); }
   .turn .head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
@@ -179,6 +187,7 @@
   <h1>Bangla Voice Conversation</h1>
   <span class="pill" id="asrPill">ASR: checking…</span>
   <span class="pill" id="llmPill">LLM: checking…</span>
+  <span class="pill" id="ttsPill">Voice: checking…</span>
   <div class="status"><span class="dot" id="dot"></span><span id="statusText">loading VAD…</span></div>
 </header>
 
@@ -205,7 +214,9 @@
 
     <details class="card stack" id="modeCard" open>
       <summary><h2>Conversation mode</h2></summary>
-      <label class="check"><input type="checkbox" id="doAsr" checked /> Transcribe turns (Bangla ASR)</label>
+      <label class="check"><input type="checkbox" id="doAsr" checked /> Transcribe speech</label>
+      <label class="check"><input type="checkbox" id="showText" checked /> Show conversation text</label>
+      <label class="check"><input type="checkbox" id="doPreview" /> Live partial text (next mic start)</label>
       <label class="check"><input type="checkbox" id="doReply" checked /> Generate a reply after each turn</label>
       <label class="check"><input type="checkbox" id="doSpeak" checked /> Speak the reply out loud</label>
       <select id="llmModel"><option value="">default model</option></select>
@@ -214,22 +225,22 @@
 
     <details class="card stack" id="vadCard" open>
       <summary><h2>VAD settings</h2></summary>
-      <label class="row">Speech threshold <output id="posOut">0.50</output></label>
-      <input type="range" id="posThr" min="0.1" max="0.95" step="0.05" value="0.5" />
-      <label class="row">Silence threshold <output id="negOut">0.35</output></label>
-      <input type="range" id="negThr" min="0.05" max="0.9" step="0.05" value="0.35" />
+      <label class="row">Speech threshold <output id="posOut">0.35</output></label>
+      <input type="range" id="posThr" min="0.1" max="0.95" step="0.05" value="0.35" />
+      <label class="row">Silence threshold <output id="negOut">0.20</output></label>
+      <input type="range" id="negThr" min="0.05" max="0.9" step="0.05" value="0.20" />
       <label class="row">Natural pause baseline (ms) <output id="redOut">800</output></label>
       <input type="range" id="redemption" min="500" max="1800" step="50" value="800" />
-      <label class="row">Min speech (ms) <output id="minOut">250</output></label>
-      <input type="range" id="minSpeech" min="50" max="1500" step="50" value="250" />
-      <label class="row">Pre-speech pad (ms) <output id="padOut">300</output></label>
-      <input type="range" id="prePad" min="0" max="1000" step="50" value="300" />
+      <label class="row">Min speech (ms) <output id="minOut">120</output></label>
+      <input type="range" id="minSpeech" min="50" max="1500" step="10" value="120" />
+      <label class="row">Pre-speech pad (ms) <output id="padOut">450</output></label>
+      <input type="range" id="prePad" min="0" max="1000" step="50" value="450" />
       <div class="hint">The bot extends the pause for short fragments and unfinished phrases. Speech thresholds apply on the next mic start.</div>
     </details>
   </div>
 
   <div class="card convo">
-    <div class="hint">Live preview · recent speech · may change</div>
+    <div class="hint" id="previewHint">Live preview · recent speech · may change</div>
     <div id="partialText" class="bn" role="status" aria-live="polite"></div>
     <div class="toolbar">
       <h2 style="margin:0">Conversation</h2>
@@ -248,9 +259,21 @@
     </div>
     <div style="height:12px"></div>
     <div class="turns" id="turns">
-      <div class="empty" id="empty">No turns yet. Upload an audio file or start the microphone.</div>
+      <div class="empty" id="empty">Start talking, type a message, or share a picture.</div>
     </div>
     <div class="live" id="live">● speaking… <span id="liveDur">0.0s</span></div>
+    <form class="composer" id="chatForm">
+      <label for="chatText">Message</label>
+      <textarea id="chatText" maxlength="4000" placeholder="Type a message or ask about a picture…" rows="2"></textarea>
+      <div id="imagePreview" hidden><img class="chat-image" alt="Selected image preview" /><button type="button" class="small ghost" id="removeImageBtn">Remove image</button></div>
+      <div class="composer-actions">
+        <input type="file" id="imageInput" accept="image/jpeg,image/png,image/webp" hidden />
+        <button type="button" id="attachImageBtn">Attach image</button>
+        <span class="hint">JPEG, PNG or WebP · up to 8 MB · Ctrl/⌘ Enter to send</span>
+        <button type="submit" id="sendChatBtn" disabled>Send</button>
+      </div>
+      <div class="err" id="chatError" role="alert"></div>
+    </form>
     <div class="err" id="err"></div>
   </div>
 </main>
@@ -259,6 +282,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/bundle.min.js"></script>
 <script src="/static/live.js"></script>
 <script src="/static/turn-taking.js"></script>
+<script src="/static/reply-stream.js"></script>
 <script>
 (() => {
   const ORT_BASE = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/";
@@ -268,7 +292,7 @@
 
   const state = {
     sessionId: null, turns: [], micVad: null, micOn: false,
-    micStartedAt: 0, speechStartedAt: 0, busy: false, replying: false, asrTimes: [], activeReply: null, pendingAuto: null,
+    micStartedAt: 0, speechStartedAt: 0, busy: false, replying: false, asrTimes: [], activeReply: null, pendingAuto: null, chatSending: false, pendingChatReply: false,
   };
 
   const preview = new LiveTranscript(
@@ -281,6 +305,8 @@
   let turnQueue = Promise.resolve();
   let interruptQueue = Promise.resolve();
   let sessionPromise = null;
+  let voicedMs = 0;
+  let confirmedSpeech = false;
 
   const fmt = (ms) => (ms / 1000).toFixed(1) + "s";
   const clock = (ms) => {
@@ -301,15 +327,19 @@
     if (state.micOn) setStatus("transcribing… still listening", "thinking");
     turnQueue = turnQueue.then(async () => {
       await uploadTurn(turn);
-      if (turn.text && epoch === endpoint.epoch) state.pendingAuto = epoch;
+      if (turn.text && epoch === endpoint.epoch) {
+        interruptReply();
+        state.pendingAuto = epoch;
+      }
       maybeReply();
     }).catch(showErr);
   }
 
   function maybeReply() {
-    if (state.micOn && !endpoint.speaking && !endpoint.segments.length &&
+    if (!state.chatSending && (state.micOn || state.pendingChatReply) && !endpoint.speaking && !endpoint.segments.length &&
         state.pendingAuto === endpoint.epoch && $("doReply").checked) {
       state.pendingAuto = null;
+      state.pendingChatReply = false;
       void generateReply();
     }
   }
@@ -414,16 +444,112 @@
 
   function updateStats() {
     const n = state.turns.length;
-    const total = state.turns.filter(t => t.role === "user").reduce((a, t) => a + (t.endMs - t.startMs), 0);
+    const total = state.turns.filter(t => t.role === "user" && Number.isFinite(t.startMs) && Number.isFinite(t.endMs)).reduce((a, t) => a + (t.endMs - t.startMs), 0);
     const words = state.turns.reduce((a, t) => a + (t.text ? t.text.trim().split(/\s+/).filter(Boolean).length : 0), 0);
     $("stTurns").textContent = n;
     $("stSpeech").textContent = fmt(total);
     $("stWords").textContent = words;
     $("stAsr").textContent = state.asrTimes.length
       ? Math.round(state.asrTimes.reduce((a, b) => a + b, 0) / state.asrTimes.length) + "ms" : "–";
-    for (const id of ["exportJsonBtn", "exportWavBtn", "clearBtn"]) $(id).disabled = n === 0;
-    $("replyBtn").disabled = !state.turns.some(t => t.text);
+    for (const id of ["exportJsonBtn", "clearBtn"]) $(id).disabled = n === 0 || state.chatSending;
+    $("exportWavBtn").disabled = !state.turns.some(t => t.audio);
+    $("replyBtn").disabled = state.chatSending || !state.turns.some(t => t.text || t.image);
   }
+
+  // ---------------- text and image messages ----------------
+  $("showText").addEventListener("change", () => document.body.classList.toggle("hide-conversation-text", !$("showText").checked));
+  let selectedImage = null;
+  let selectedImageUrl = null;
+  function updateComposer() {
+    const blocked = state.chatSending || state.busy;
+    $("sendChatBtn").disabled = blocked || (!$("chatText").value.trim() && !selectedImage);
+    $("sendChatBtn").textContent = state.chatSending ? "Sending…" : "Send";
+    for (const id of ["chatText", "attachImageBtn", "imageInput", "removeImageBtn"]) $(id).disabled = blocked;
+  }
+  function removeImage() {
+    if (selectedImageUrl) URL.revokeObjectURL(selectedImageUrl);
+    selectedImage = null; selectedImageUrl = null;
+    $("imageInput").value = "";
+    $("imagePreview").hidden = true;
+    $("imagePreview").querySelector("img").removeAttribute("src");
+    updateComposer();
+  }
+  $("attachImageBtn").addEventListener("click", () => $("imageInput").click());
+  $("removeImageBtn").addEventListener("click", removeImage);
+  $("chatText").addEventListener("input", updateComposer);
+  $("imageInput").addEventListener("change", () => {
+    const file = $("imageInput").files[0];
+    if (!file) return;
+    $("chatError").textContent = "";
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 8 * 1024 * 1024) {
+      $("chatError").textContent = "Choose a JPEG, PNG or WebP image no larger than 8 MB.";
+      $("imageInput").value = "";
+      return;
+    }
+    removeImage();
+    selectedImage = file;
+    selectedImageUrl = URL.createObjectURL(file);
+    $("imagePreview").querySelector("img").src = selectedImageUrl;
+    $("imagePreview").hidden = false;
+    updateComposer();
+  });
+  function addChatTurn(saved, sid) {
+    const turn = {index: state.turns.length + 1, role: "user", source: "chat", text: saved.text, image: saved.image};
+    const el = document.createElement("div");
+    el.className = "turn chat";
+    el.innerHTML = '<div class="badge">CHAT</div><div><div class="head"><b>You</b><span class="save ok">saved ✓</span></div><div class="text bn"></div></div>';
+    el.querySelector(".text").textContent = turn.text || "";
+    if (turn.image) {
+      turn.imageUrl = `/api/sessions/${encodeURIComponent(sid)}/images/${encodeURIComponent(turn.image)}`;
+      const img = document.createElement("img");
+      img.className = "chat-image"; img.alt = "Shared image"; img.src = turn.imageUrl;
+      el.lastElementChild.appendChild(img);
+    }
+    turn.el = el;
+    state.turns.push(turn);
+    $("empty").style.display = "none";
+    $("turns").appendChild(el);
+    el.scrollIntoView({behavior: "smooth", block: "nearest"});
+    updateStats();
+  }
+  async function sendChat(event) {
+    event.preventDefault();
+    const text = $("chatText").value.trim();
+    if (state.chatSending || state.busy || (!text && !selectedImage)) return;
+    void primeAudio().catch(showErr);
+    state.chatSending = true;
+    state.pendingAuto = null; state.pendingChatReply = false;
+    interruptReply();
+    updateComposer(); updateStats();
+    $("chatError").textContent = "";
+    const fd = new FormData();
+    fd.append("text", text);
+    if (selectedImage) fd.append("image", selectedImage);
+    // Flush completed voice segments so they precede this message in history.
+    if (!endpoint.speaking) endpoint.flush();
+    const request = turnQueue.then(async () => {
+      await interruptQueue;
+      const sid = await ensureSession();
+      const saved = await api(`/api/sessions/${sid}/messages`, {method: "POST", body: fd});
+      addChatTurn(saved, sid);
+      $("chatText").value = "";
+      removeImage();
+      state.pendingAuto = endpoint.epoch;
+      state.pendingChatReply = true;
+    });
+    turnQueue = request.catch(() => {});
+    try { await request; }
+    catch (e) { $("chatError").textContent = e.message || String(e); }
+    finally {
+      state.chatSending = false;
+      updateComposer(); updateStats();
+      maybeReply();
+    }
+  }
+  $("chatForm").addEventListener("submit", sendChat);
+  $("chatText").addEventListener("keydown", event => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") void sendChat(event);
+  });
 
   // ---------------- upload + transcribe ----------------
   async function uploadTurn(turn) {
@@ -479,8 +605,8 @@
   }
 
   async function generateReply() {
-    if (state.activeReply || endpoint.speaking || endpoint.segments.length) return;
-    const active = {id: crypto.randomUUID(), controller: new AbortController()};
+    if (state.chatSending || state.activeReply || endpoint.speaking || endpoint.segments.length) return;
+    const active = {id: crypto.randomUUID(), controller: new AbortController(), voiceQueue: Promise.resolve(), chunks: new SpeechChunks()};
     state.activeReply = active;
     state.replying = true;
     setStatus("thinking… still listening", "thinking");
@@ -489,20 +615,30 @@
       if (state.activeReply !== active) return;
       active.sid = await ensureSession();
       if (state.activeReply !== active) return;
-      const turn = await api(`/api/sessions/${active.sid}/reply`, {
+      const response = await fetch(`/api/sessions/${active.sid}/reply/stream`, {
         method: "POST", headers: {"Content-Type": "application/json"},
         signal: active.controller.signal,
         body: JSON.stringify({model: $("llmModel").value || null, request_id: active.id}),
       });
-      // A tentative VAD onset blocks playback; confirmed speech cancels it.
-      while (endpoint.speaking && state.activeReply === active) {
-        await new Promise(resolve => setTimeout(resolve, 40));
-      }
-      if (state.activeReply !== active) return;
-      active.turn = addBotTurn(turn.text, `${turn.model} · ${turn.gen_ms}ms`);
-      if ($("doSpeak").checked) await speak(turn.text, active);
+      await consumeReplyStream(response, event => {
+        if (state.activeReply !== active) return;
+        if (event.type === "delta") {
+          if (!active.turn) active.turn = addBotTurn("", $("llmModel").value || "gemma4:e2b");
+          active.turn.text += event.text;
+          active.turn.el.querySelector(".text").textContent = active.turn.text;
+          if ($("doSpeak").checked) for (const chunk of active.chunks.push(event.text)) queueSpeech(chunk, active);
+          updateStats();
+        } else if (event.type === "done") {
+          if (!active.turn) active.turn = addBotTurn(event.turn.text, event.turn.model);
+          active.turn.text = event.turn.text;
+          active.turn.el.querySelector(".text").textContent = event.turn.text;
+          if ($("doSpeak").checked) for (const chunk of active.chunks.push("", true)) queueSpeech(chunk, active);
+          updateStats();
+        }
+      });
+      await active.voiceQueue;
     } catch (e) {
-      if (state.activeReply === active && e.name !== "AbortError") showErr(e);
+      if (state.activeReply === active && e.name !== "AbortError") { showErr(e); interruptReply(); }
     } finally {
       if (state.activeReply === active) {
         state.activeReply = null;
@@ -512,29 +648,17 @@
     }
   }
 
-  async function speak(text, active) {
+  function queueSpeech(text, active) {
     if (state.activeReply !== active) return;
-    const voice = window.speechSynthesis?.getVoices().find(v => /^bn(?:-|$)/i.test(v.lang));
-    if (!voice) return speakLocal(text, active);
-    return new Promise(resolve => {
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = "bn-BD";
-      u.voice = voice;
-      let settled = false;
-      let watchdog;
-      const done = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(watchdog);
-        active.finishSpeech = null;
-        resolve();
-      };
-      active.finishSpeech = done;
-      u.onend = done;
-      u.onerror = done;
-      watchdog = setTimeout(() => { speechSynthesis.cancel(); done(); }, Math.max(15000, text.length * 200));
-      setStatus("speaking… you can interrupt", "speaking");
-      speechSynthesis.speak(u);
+    // Prepare the next sentence while the previous one plays.
+    const prepared = prepareSpeech(text, active);
+    prepared.catch(() => {});
+    active.voiceQueue = active.voiceQueue.then(async () => {
+      const buffer = await prepared;
+      while (endpoint.speaking && state.activeReply === active) await new Promise(resolve => setTimeout(resolve, 40));
+      if (state.activeReply === active && $("doSpeak").checked) await playSpeech(buffer, active);
+    }).catch(e => {
+      if (state.activeReply === active && e.name !== "AbortError") showErr(e);
     });
   }
 
@@ -543,15 +667,17 @@
     if (!speechContext) speechContext = new AudioContext();
     return speechContext.resume();
   }
-  async function speakLocal(text, active) {
+  async function prepareSpeech(text, active) {
     await primeAudio();
+    if (!active.playing) setStatus("preparing voice… still listening", "thinking");
     const response = await fetch("/api/speech", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({text}), signal: active.controller.signal,
     });
     if (!response.ok) throw new Error("Speech playback: " + await response.text());
-    const buffer = await speechContext.decodeAudioData(await response.arrayBuffer());
-    if (state.activeReply !== active) return;
+    return speechContext.decodeAudioData(await response.arrayBuffer());
+  }
+  function playSpeech(buffer, active) {
     return new Promise(resolve => {
       const source = speechContext.createBufferSource();
       source.buffer = buffer;
@@ -564,10 +690,12 @@
         try { source.stop(); } catch {}
         source.disconnect();
         active.finishSpeech = null;
+        active.playing = false;
         resolve();
       };
       active.finishSpeech = done;
       source.onended = done;
+      active.playing = true;
       setStatus("speaking… you can interrupt", "speaking");
       source.start();
     });
@@ -581,8 +709,8 @@
   $("fileInput").addEventListener("change", (e) => { if (e.target.files[0]) processFile(e.target.files[0]); e.target.value = ""; });
 
   async function processFile(file) {
-    if (state.busy) return;
-    state.busy = true; showErr(null);
+    if (state.busy || state.chatSending) return;
+    state.busy = true; updateComposer(); showErr(null);
     const prog = $("fileProgress"); prog.style.display = "block"; prog.firstElementChild.style.width = "0%";
     setStatus(`decoding ${file.name}…`, "ready");
     try {
@@ -623,7 +751,7 @@
       setStatus(`${pending.length} segment(s) from ${file.name}`, "ready");
       if ($("doReply").checked && pending.length) await generateReply();
     } catch (e) { showErr(e); setStatus("file processing failed", ""); }
-    finally { state.busy = false; setTimeout(() => { prog.style.display = "none"; }, 800); }
+    finally { state.busy = false; updateComposer(); setTimeout(() => { prog.style.display = "none"; }, 800); }
   }
 
   // ---------------- mic → MicVAD ----------------
@@ -656,14 +784,14 @@
     void primeAudio().catch(showErr);
     endpoint.reset();
     state.pendingAuto = null;
-    preview.connect();
+    if ($("doAsr").checked && $("doPreview").checked) preview.connect();
     $("micBtn").disabled = true; $("micBtn").textContent = "starting…";
     try {
       if (state.micVad) { try { await state.micVad.destroy(); } catch {} state.micVad = null; }
       state.micVad = await vad.MicVAD.new({
         ...vadOptions(),
         redemptionMs: 300,
-        minSpeechMs: Math.max(250, +$("minSpeech").value),
+        minSpeechMs: +$("minSpeech").value,
         getStream: () => navigator.mediaDevices.getUserMedia({audio: {
           channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true,
         }}),
@@ -674,9 +802,13 @@
         submitUserSpeechOnPause: true,
         onFrameProcessed: (p, frame) => {
           $("meter").style.width = (p.isSpeech * 100).toFixed(0) + "%";
-          if ($("doAsr").checked) preview.frame(frame);
+          if (p.isSpeech >= +$("posThr").value) voicedMs += frame.length / SR * 1000;
+          if (confirmedSpeech && state.activeReply?.playing && voicedMs >= 250) interruptReply();
+          if ($("doAsr").checked && $("doPreview").checked) preview.frame(frame);
         },
         onSpeechStart: () => {
+          voicedMs = 0;
+          confirmedSpeech = false;
           endpoint.start();
           preview.begin();
           state.speechStartedAt = performance.now() - state.micStartedAt;
@@ -686,10 +818,13 @@
           liveTimer = setInterval(() => { $("liveDur").textContent = fmt(performance.now() - state.micStartedAt - state.speechStartedAt); }, 100);
         },
         onSpeechRealStart: () => {
+          endpoint.confirm();
+          confirmedSpeech = true;
           state.pendingAuto = null;
-          interruptReply();
+          if (!state.activeReply?.playing || voicedMs >= 250) interruptReply();
         },
         onVADMisfire: () => {
+          confirmedSpeech = false;
           endpoint.misfire();
           preview.end(); stopLive();
           if (state.pendingAuto !== null) state.pendingAuto = endpoint.epoch;
@@ -697,6 +832,7 @@
           if (!state.activeReply) setStatus("listening…", "listening");
         },
         onSpeechEnd: (audio) => {
+          confirmedSpeech = false;
           stopLive();
           const endMs = performance.now() - state.micStartedAt;
           const startMs = Math.max(0, endMs - audio.length / SR * 1000);
@@ -742,7 +878,7 @@
       index: t.index, role: t.role, source: t.source, origin: t.origin || null,
       start_ms: t.startMs != null ? +t.startMs.toFixed(1) : null,
       end_ms: t.endMs != null ? +t.endMs.toFixed(1) : null,
-      text: t.text || null, file: t.file || null, interrupted: !!t.interrupted,
+      text: t.text || null, file: t.file || null, image: t.image || null, image_url: t.imageUrl || null, interrupted: !!t.interrupted,
     }));
     download(new Blob([JSON.stringify({ session_id: state.sessionId, sample_rate: SR, turns: rows }, null, 2)], { type: "application/json;charset=utf-8" }), `conversation-${state.sessionId || "local"}.json`);
   });
@@ -776,6 +912,12 @@
       if (h.asr.error) { a.textContent = "ASR: failed"; a.className = "pill bad"; showErr(new Error("ASR: " + h.asr.error)); }
       else if (h.asr.loaded) { a.textContent = `ASR ready (${h.asr.device || "cpu"})`; a.className = "pill ok"; }
       else { a.textContent = "ASR: loading model…"; a.className = "pill wait"; setTimeout(pollHealth, 3000); }
+      if (h.tts) {
+        const voice = $("ttsPill");
+        voice.textContent = h.tts.error ? "Voice: unavailable" : h.tts.loaded ? "Voice: ready" : "Voice: loading…";
+        voice.className = "pill " + (h.tts.error ? "bad" : h.tts.loaded ? "ok" : "wait");
+        if (!h.tts.loaded && !h.tts.error && h.asr.loaded) setTimeout(pollHealth, 3000);
+      }
       const l = $("llmPill");
       l.textContent = h.llm.available ? `LLM: ${h.llm.model}` : "LLM: offline";
       l.className = "pill " + (h.llm.available ? "ok" : "bad");
