@@ -45,7 +45,7 @@ model, and a local LLM writes a reply. Everything runs on this machine.
 |---|---|---|
 | voice activity detection | Silero VAD via `@ricky0123/vad-web` (ONNX runtime, WASM) | browser |
 | speech to text | [`ehzawad/stt_bn_fastconformer_ctc`](https://huggingface.co/ehzawad/stt_bn_fastconformer_ctc) (NeMo, 115 M params) | server, GPU if free |
-| text generation | Ollama chat model, default `gemma3:4b` | localhost:11434 |
+| text generation | Ollama chat model, default `gemma4:e2b` | localhost:11434 |
 | speech out (optional) | browser `speechSynthesis`, `bn-BD` voice if installed | browser |
 
 ## Setup
@@ -64,7 +64,7 @@ Text generation needs Ollama with a chat model:
 
 ```bash
 ollama serve &          # if not already running
-ollama pull gemma3:4b   # or set CTC_LLM_MODEL to any model you have
+ollama pull gemma4:e2b   # or set CTC_LLM_MODEL to any model you have
 ```
 
 ## Run

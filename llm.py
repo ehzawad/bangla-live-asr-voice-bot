@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-MODEL = os.environ.get("CTC_LLM_MODEL", "gemma3:4b")
+MODEL = os.environ.get("CTC_LLM_MODEL", "gemma4:e2b")
 
 SYSTEM = (
     "তুমি একজন সহায়ক বাংলা ভয়েস অ্যাসিস্ট্যান্ট। ব্যবহারকারীর কথা বাংলা স্পিচ-টু-টেক্সট "
